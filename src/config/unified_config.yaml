@@ -1,0 +1,42 @@
+# Unified experiment configuration
+# All model names must use "provider/model" format for LiteLLM routing.
+# Variants carry only overrides; the loader deep-merges them with defaults.
+
+# --- Shared infrastructure ---
+telemetry:
+  log_level: "INFO"
+  output_dir: "evaluations/"
+
+# --- Default experiment parameters ---
+# All variants inherit these unless explicitly overridden.
+default:
+  agent_type: "dummy"  # "dummy" | "vector" | "graph"
+  data_file: "baseline_dummy.json"
+
+  llm:
+    model: "ollama/gpt-oss:20b"
+    temperature: 0.0
+    max_tokens: 2048
+
+  embedding:
+    model: "ollama/nomic-embed-text"
+    batch_size: 32
+
+  retrieval:
+    top_k: 5
+    similarity_cutoff: 0.7
+
+  ingestion:
+    chunk_size: 512
+    chunk_overlap: 64
+
+# --- Named experiment variants ---
+# Each variant inherits all defaults and applies its overrides.
+# agent_type determines which memory backend and agent class is used.
+# data_file points to a JSON file in data/raw/ containing documents and questions.
+# memory_path is where the agent's memory store is persisted between pipeline steps.
+variants:
+  baseline_dummy:
+    agent_type: "dummy"
+    data_file: "baseline_dummy.json"
+    memory_path: "data/processed/baseline_dummy.json"

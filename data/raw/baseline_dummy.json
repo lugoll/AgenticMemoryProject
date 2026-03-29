@@ -1,0 +1,36 @@
+{
+  "documents": [
+    "The Eiffel Tower is located in Paris, France. It was built by Gustave Eiffel.",
+    "Paris is the capital and most populous city of France.",
+    "The Eiffel Tower was constructed between 1887 and 1889 as the entrance arch for the 1889 World's Fair.",
+    "Mount Everest is the highest mountain on Earth, standing at 8,848 metres above sea level.",
+    "Mount Everest sits on the border between Nepal and Tibet.",
+    "The Amazon River is the largest river in the world by discharge volume.",
+    "The Amazon River flows through South America, primarily through Brazil.",
+    "Water boils at 100 degrees Celsius at standard atmospheric pressure.",
+    "The speed of light in a vacuum is approximately 299,792 kilometres per second.",
+    "The Great Wall of China is the longest wall in the world, stretching over 21,000 kilometres."
+  ],
+  "questions": [
+    {
+      "question": "Where is the Eiffel Tower located?",
+      "expected": "Paris, France"
+    },
+    {
+      "question": "Who built the Eiffel Tower?",
+      "expected": "Gustave Eiffel"
+    },
+    {
+      "question": "What is the highest mountain on Earth?",
+      "expected": "Mount Everest"
+    },
+    {
+      "question": "Which river has the largest discharge volume in the world?",
+      "expected": "Amazon River"
+    },
+    {
+      "question": "At what temperature does water boil?",
+      "expected": "100 degrees Celsius"
+    }
+  ]
+}
