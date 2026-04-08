@@ -20,6 +20,7 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/raw/baseline_dummy*
+!data/raw/multihop_benchmark*
 !data/processed/.gitkeep
 !data/processed/baseline_dummy*
 
