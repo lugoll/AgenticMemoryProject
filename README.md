@@ -113,12 +113,12 @@ AgenticMemoryProject/
 
 ## Tech Stack
 
-| Layer | Library | Role |
-|---|---|---|
-| Agent orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) | State machine, graph nodes, reasoning loop |
-| LLM gateway | [LiteLLM](https://github.com/BerriAI/litellm) | Unified API for all LLM calls + token tracking |
-| Config | Pydantic + YAML | Validated, reproducible experiment parameters |
-| Package management | [uv](https://github.com/astral-sh/uv) | Fast dependency resolution |
+| Layer               | Library                                                | Role                                           |
+| ------------------- | ------------------------------------------------------ | ---------------------------------------------- |
+| Agent orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) | State machine, graph nodes, reasoning loop     |
+| LLM gateway         | [LiteLLM](https://github.com/BerriAI/litellm)          | Unified API for all LLM calls + token tracking |
+| Config              | Pydantic + YAML                                        | Validated, reproducible experiment parameters  |
+| Package management  | [uv](https://github.com/astral-sh/uv)                  | Fast dependency resolution                     |
 
 ---
 
@@ -157,9 +157,11 @@ python main.py --variant baseline_dummy --ingest --qa \
 ```
 
 Output after `--qa`:
+
 ```
 Results saved to: evaluations/baseline_dummy_20260324T190000Z_results.jsonl
 ```
+
 Telemetry is written automatically to `evaluations/telemetry_<session_ts>.jsonl`.
 
 ---
@@ -170,10 +172,10 @@ All experiment parameters live in [`src/config/unified_config.yaml`](src/config/
 
 ```yaml
 default:
-  agent_type: "dummy"            # "dummy" | "vector" | "graph"
-  data_file: "baseline_dummy.json"   # file under data/raw/
+  agent_type: "dummy" # "dummy" | "vector" | "graph"
+  data_file: "baseline_dummy.json" # file under data/raw/
   llm:
-    model: "ollama/gpt-oss:20b"  # always "provider/model" format
+    model: "ollama/gpt-oss:20b" # always "provider/model" format
     temperature: 0.0
     max_tokens: 2048
   retrieval:
@@ -186,10 +188,11 @@ variants:
   baseline_dummy:
     agent_type: "dummy"
     data_file: "baseline_dummy.json"
-    memory_path: "data/processed/baseline_dummy.json"  # persist between ingest + qa
+    memory_path: "data/processed/baseline_dummy.json" # persist between ingest + qa
 ```
 
 **Validation rules:**
+
 - All model names must use `provider/model` format (e.g., `ollama/mixtral`). A bare name raises `ValidationError`.
 - `chunk_overlap` must be strictly less than `chunk_size`.
 - `agent_type` must be `"dummy"`, `"vector"`, or `"graph"`.
@@ -283,6 +286,7 @@ classDiagram
 ```
 
 **Key design rules:**
+
 - `BaseAgent` is fully concrete. Subclasses only change the **memory backend** (constructor) or the **system prompt** (`_SYSTEM_PROMPT` class attribute) or the **graph topology** (`_build_graph()` override).
 - `build_agent(config)` in `factory.py` is the only place that maps `agent_type` → concrete agent class. Pipeline code never imports agent classes directly.
 - `BaseMemory` is the only interface the agent ever touches. It has no knowledge of whether `_memory` is `DummyMemory`, `VectorMemory`, or `GraphMemory`.
@@ -295,18 +299,27 @@ classDiagram
 Every LLM call is intercepted by `TelemetryTracker` (a LiteLLM `CustomLogger`) and appended to a JSONL file in `evaluations/`:
 
 ```json
-{"event": "llm_call", "timestamp": "2026-03-24T19:02:48Z", "call_index": 3,
- "run_id": "a1b2c3d4", "phase": "agent_reasoning", "actor": "langgraph_node",
- "variant_name": "baseline_dummy", "model": "ollama/gpt-oss:20b",
- "prompt_tokens": 312, "completion_tokens": 48, "total_tokens": 360,
- "latency_ms": 843.2}
+{
+  "event": "llm_call",
+  "timestamp": "2026-03-24T19:02:48Z",
+  "call_index": 3,
+  "run_id": "a1b2c3d4",
+  "phase": "agent_reasoning",
+  "actor": "langgraph_node",
+  "variant_name": "baseline_dummy",
+  "model": "ollama/gpt-oss:20b",
+  "prompt_tokens": 312,
+  "completion_tokens": 48,
+  "total_tokens": 360,
+  "latency_ms": 843.2
+}
 ```
 
 **Required tags** — every LiteLLM call must supply both via the `metadata` argument:
 
-| Tag | Allowed values |
-|-----|----------------|
-| `phase` | `ingest`, `retrieval_overhead`, `agent_reasoning`, `evaluation` |
+| Tag     | Allowed values                                                                        |
+| ------- | ------------------------------------------------------------------------------------- |
+| `phase` | `ingest`, `retrieval_overhead`, `agent_reasoning`, `evaluation`                       |
 | `actor` | `vector_embed`, `graph_extract`, `graph_cypher_gen`, `langgraph_node`, `llm_as_judge` |
 
 Missing tags produce a `WARNING` log and `"UNTAGGED"` in the record, making them easy to find.
@@ -398,4 +411,4 @@ class BaseMemory(ABC):
 
 **Reset before every ingest.** Call `memory.reset()` at the start of each ingestion run to guarantee that previous data from failed or partial runs does not pollute results.
 
-**Return plain strings from `search()`.** Backend-specific objects (LlamaIndex `Document`, embedding vectors, graph node IDs) must never cross the `BaseMemory` boundary into the agent.
+**Return plain strings from `search()`.** Backend-specific objects (ChromaDB `Document`, embedding vectors, graph node IDs) must never cross the `BaseMemory` boundary into the agent.

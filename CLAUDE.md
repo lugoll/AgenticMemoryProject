@@ -5,14 +5,14 @@
 This repository is a scientific evaluation framework designed to measure and optimize token efficiency, memory architectures, and latency in autonomous AI agents. The project follows the CRISP-DM methodology.
 
 **Core Problem:** Current open-source agents suffer from "context poisoning" and massive token consumption when using standard Vector RAG for complex, multi-hop reasoning.
-**Proposed Solution:** Systematically compare a baseline Vector RAG system against an optimized Hybrid GraphRAG (and potentially a RAPTOR/Tiered memory model) to measure the tradeoff between heavy upfront ingestion costs (GraphRAG) and test-time token waste (Vector RAG).
+**Proposed Solution:** Systematically compare a baseline Vector RAG system against an optimized (Hybrid) GraphRAG to measure the tradeoff between heavy upfront ingestion costs (GraphRAG) and test-time token waste (Vector RAG).
 
 ## 2. Tech Stack & Frameworks
 
 You must strictly adhere to the following stack when generating code:
 
 - **Agent Orchestration:** `LangGraph` (Used for defining agent state, reasoning loops, and tool calling).
-- **Memory & RAG:** `LlamaIndex` (Used for underlying Vector Store, Property Graph, and Retrieval logic).
+- **Memory & RAG:** Not defined yet.
 - **LLM Gateway & Telemetry:** `LiteLLM` (MUST be used for ALL LLM calls to ensure unified configuration and precise token/cost tracking).
 - **Configuration:** Pydantic / YAML (Unified config across all models).
 
