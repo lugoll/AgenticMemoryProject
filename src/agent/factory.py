@@ -26,13 +26,13 @@ def build_agent(config: ExperimentConfig) -> BaseAgent:
         from .agent_dummy import DummyAgent
         return DummyAgent(config=config)
 
-    # Future backends follow the same pattern:
+    if config.agent_type == "graph":
+        from .agent_graph import GraphAgent
+        return GraphAgent(config=config)
+
     # if config.agent_type == "vector":
     #     from .agent_vector import VectorAgent
     #     return VectorAgent(config=config)
-    # if config.agent_type == "graph":
-    #     from .agent_graph import GraphAgent
-    #     return GraphAgent(config=config)
 
     raise ValueError(
         f"Unknown agent_type '{config.agent_type}'. "

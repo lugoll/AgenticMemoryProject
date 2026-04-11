@@ -40,3 +40,8 @@ variants:
     agent_type: "dummy"
     data_file: "baseline_dummy.json"
     memory_path: "data/processed/baseline_dummy.json"
+
+  graph_v1:
+    agent_type: "graph"
+    data_file: "multihop_benchmark.json"
+    memory_path: "data/processed/graph_v1.json"

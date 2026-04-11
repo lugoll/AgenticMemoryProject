@@ -1,0 +1,74 @@
+{
+  "documents": [
+    "Nikola Tesla was born in Smiljan, a village in modern-day Croatia.",
+    "Zagreb is the capital city of Croatia.",
+    "Nikola Tesla invented the alternating current (AC) electrical system.",
+    "Alexander Fleming discovered Penicillin in 1928 at St. Mary's Hospital.",
+    "St. Mary's Hospital is located in London, England.",
+    "London is the capital of the United Kingdom.",
+    "Albert Einstein was born in Ulm, a city in Germany.",
+    "Berlin is the capital of Germany.",
+    "Albert Einstein developed the Theory of General Relativity.",
+    "The Theory of General Relativity predicted the existence of gravitational waves.",
+    "Gravitational waves were first detected by the LIGO observatory in 2015.",
+    "Marie Curie discovered the radioactive elements Polonium and Radium.",
+    "Marie Curie was born in Warsaw, Poland.",
+    "Warsaw is the capital of Poland.",
+    "Radium is used in radiation therapy to treat certain types of cancer.",
+    "The Mona Lisa was painted by Leonardo da Vinci.",
+    "The Mona Lisa is displayed in the Louvre museum.",
+    "The Louvre museum is located in Paris, France.",
+    "Paris is the capital of France.",
+    "Leonardo da Vinci also painted The Last Supper."
+  ],
+  "questions": [
+    {
+      "question": "What is the capital of the country where Nikola Tesla was born?",
+      "expected": "Zagreb",
+      "hops": 3,
+      "chain": "Tesla -> born_in -> Smiljan -> part_of -> Croatia -> capital -> Zagreb"
+    },
+    {
+      "question": "In which city did the discoverer of Penicillin make his discovery?",
+      "expected": "London",
+      "hops": 3,
+      "chain": "Penicillin -> discovered_at -> St. Mary's Hospital -> located_in -> London"
+    },
+    {
+      "question": "What is the capital of the country where the developer of the Theory of General Relativity was born?",
+      "expected": "Berlin",
+      "hops": 4,
+      "chain": "Theory of General Relativity -> developed_by -> Einstein -> born_in -> Ulm -> part_of -> Germany -> capital -> Berlin"
+    },
+    {
+      "question": "Which radioactive element discovered by the scientist born in Warsaw is used in cancer treatment?",
+      "expected": "Radium",
+      "hops": 3,
+      "chain": "Warsaw -> birthplace_of -> Marie Curie -> discovered -> Radium -> used_in -> cancer treatment"
+    },
+    {
+      "question": "In which country is the museum that displays the Mona Lisa located?",
+      "expected": "France",
+      "hops": 3,
+      "chain": "Mona Lisa -> displayed_in -> Louvre -> located_in -> Paris -> part_of -> France"
+    },
+    {
+      "question": "What phenomenon predicted by Einstein was first detected in 2015?",
+      "expected": "Gravitational waves",
+      "hops": 3,
+      "chain": "Einstein -> developed -> General Relativity -> predicted -> gravitational waves -> detected_in -> 2015"
+    },
+    {
+      "question": "Who painted the artwork displayed in the museum in the capital of France?",
+      "expected": "Leonardo da Vinci",
+      "hops": 4,
+      "chain": "France -> capital -> Paris -> has_museum -> Louvre -> displays -> Mona Lisa -> painted_by -> Leonardo da Vinci"
+    },
+    {
+      "question": "What is the capital of the country where the antibiotic discovered by Fleming is named after?",
+      "expected": "London",
+      "hops": 2,
+      "chain": "Fleming -> discovered_at -> St. Mary's Hospital -> located_in -> London -> capital_of -> United Kingdom"
+    }
+  ]
+}
