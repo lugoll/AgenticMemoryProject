@@ -13,6 +13,9 @@ Examples
 
 # Run both steps in sequence:
     python main.py --variant baseline_dummy --ingest --qa
+
+# Run all variants:
+    python main.py --variant all --ingest --qa
 """
 from __future__ import annotations
 
@@ -21,8 +24,10 @@ import logging
 import sys
 from pathlib import Path
 
-from src.config.settings import load_config
+from src.config.settings import list_variants, load_config
 from src.telemetry.tracker import register_tracker
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -35,7 +40,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--variant",
         required=True,
         metavar="NAME",
-        help="Experiment variant name as defined in unified_config.yaml.",
+        help='Experiment variant name as defined in unified_config.yaml, or "all" to run every variant.',
     )
     parser.add_argument(
         "--ingest",
@@ -71,6 +76,34 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _run_variant(
+    variant_name: str,
+    *,
+    ingest: bool,
+    qa: bool,
+    data_dir: Path,
+    output_dir: Path,
+    config_path: Path | None,
+) -> None:
+    """Run ingest and/or QA for a single variant."""
+    config = load_config(variant_name, config_path=config_path)
+
+    register_tracker(
+        log_level=config.telemetry.log_level,
+        output_dir=Path(config.telemetry.output_dir),
+        variant_name=config.variant_name,
+    )
+
+    if ingest:
+        from src.pipelines.ingest import run_ingest
+        run_ingest(config, data_dir=data_dir)
+
+    if qa:
+        from src.pipelines.qa import run_qa
+        results_path = run_qa(config, data_dir=data_dir, output_dir=output_dir)
+        logger.info("Results saved to: %s", results_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
@@ -78,27 +111,28 @@ def main(argv: list[str] | None = None) -> int:
         print("Nothing to do — pass --ingest, --qa, or both.", file=sys.stderr)
         return 1
 
-    config = load_config(args.variant, config_path=args.config)
-
-    # Boot telemetry so LiteLLM calls are tracked and written to evaluations/.
-    register_tracker(
-        log_level=config.telemetry.log_level,
-        output_dir=Path(config.telemetry.output_dir),
-    )
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    if args.ingest:
-        from src.pipelines.ingest import run_ingest
-        run_ingest(config, data_dir=args.data_dir)
+    if args.variant == "all":
+        variant_names = list_variants(config_path=args.config)
+        logger.info("Running all variants: %s", variant_names)
+    else:
+        variant_names = [args.variant]
 
-    if args.qa:
-        from src.pipelines.qa import run_qa
-        results_path = run_qa(config, data_dir=args.data_dir, output_dir=args.output_dir)
-        print(f"Results saved to: {results_path}")
+    for variant_name in variant_names:
+        logger.info("=== Starting variant: %s ===", variant_name)
+        _run_variant(
+            variant_name,
+            ingest=args.ingest,
+            qa=args.qa,
+            data_dir=args.data_dir,
+            output_dir=args.output_dir,
+            config_path=args.config,
+        )
+        logger.info("=== Finished variant: %s ===", variant_name)
 
     return 0
 

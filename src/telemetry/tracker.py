@@ -27,7 +27,7 @@ class TelemetryTracker(CustomLogger):
     token-usage records to a JSONL file in output_dir.
 
     Each tracker instance creates its own session file named
-    ``telemetry_<session_timestamp>.jsonl`` inside output_dir.  Records are
+    ``<variant>_<session_timestamp>_telemetry.jsonl`` inside output_dir.  Records are
     appended one JSON object per line so the file can be streamed and queried
     without loading it fully into memory.
 
@@ -55,13 +55,14 @@ class TelemetryTracker(CustomLogger):
         self,
         log_level: str = "INFO",
         output_dir: Path = Path("evaluations"),
+        variant_name: str = "unknown",
     ) -> None:
         super().__init__()
         self._log_level = log_level.upper()
         self._call_count: int = 0
         self._output_dir = output_dir
         session_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        self._telemetry_path: Path = output_dir / f"telemetry_{session_ts}.jsonl"
+        self._telemetry_path: Path = output_dir / f"{variant_name}_{session_ts}_telemetry.jsonl"
 
     @property
     def telemetry_path(self) -> Path:
@@ -106,6 +107,8 @@ class TelemetryTracker(CustomLogger):
         total_tokens: int = getattr(usage, "total_tokens", 0) or (
             prompt_tokens + completion_tokens
         )
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens: int = getattr(completion_details, "reasoning_tokens", 0) or 0
 
         model: str = kwargs.get("model", "unknown")
         latency_ms: float = (end_time - start_time).total_seconds() * 1000
@@ -121,6 +124,7 @@ class TelemetryTracker(CustomLogger):
             "model": model,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "reasoning_tokens": reasoning_tokens,
             "total_tokens": total_tokens,
             "latency_ms": round(latency_ms, 2),
         }
@@ -186,6 +190,7 @@ class TelemetryTracker(CustomLogger):
 def register_tracker(
     log_level: str = "INFO",
     output_dir: Path = Path("evaluations"),
+    variant_name: str = "unknown",
 ) -> TelemetryTracker:
     """
     Create and register a TelemetryTracker with LiteLLM globally.
@@ -197,11 +202,13 @@ def register_tracker(
     Args:
         log_level:  Log level string (e.g. "INFO", "DEBUG").
         output_dir: Directory where the telemetry JSONL file is written.
+        variant_name: Experiment variant name used in the output filename.
 
     Returns:
         The registered TelemetryTracker instance (useful for inspecting
         call_count and telemetry_path in tests).
     """
-    tracker = TelemetryTracker(log_level=log_level, output_dir=output_dir)
-    litellm.callbacks = [tracker]
+    tracker = TelemetryTracker(log_level=log_level, output_dir=output_dir, variant_name=variant_name)
+    litellm.success_callback = [tracker]
+    litellm.failure_callback = [tracker]
     return tracker

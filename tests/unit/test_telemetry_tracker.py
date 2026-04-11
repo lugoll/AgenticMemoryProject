@@ -12,11 +12,21 @@ import pytest
 from src.telemetry.tracker import TelemetryTracker, register_tracker
 
 
-def _make_mock_response(prompt_tokens: int = 10, completion_tokens: int = 20) -> MagicMock:
+def _make_mock_response(
+    prompt_tokens: int = 10,
+    completion_tokens: int = 20,
+    reasoning_tokens: int | None = None,
+) -> MagicMock:
     usage = MagicMock()
     usage.prompt_tokens = prompt_tokens
     usage.completion_tokens = completion_tokens
     usage.total_tokens = prompt_tokens + completion_tokens
+    if reasoning_tokens is not None:
+        details = MagicMock()
+        details.reasoning_tokens = reasoning_tokens
+        usage.completion_tokens_details = details
+    else:
+        usage.completion_tokens_details = None
     response = MagicMock()
     response.usage = usage
     return response
@@ -34,10 +44,12 @@ def _read_last_record(path: Path) -> dict:
 
 @pytest.fixture(autouse=True)
 def reset_litellm_callbacks():
-    """Restore litellm.callbacks after each test to avoid cross-test pollution."""
-    original = list(litellm.callbacks)
+    """Restore litellm callback lists after each test to avoid cross-test pollution."""
+    orig_success = list(litellm.success_callback)
+    orig_failure = list(litellm.failure_callback)
     yield
-    litellm.callbacks = original
+    litellm.success_callback = orig_success
+    litellm.failure_callback = orig_failure
 
 
 class TestTelemetryTrackerCallCount:
@@ -144,6 +156,30 @@ class TestTelemetryTrackerOutput:
         assert record["error"] == "Connection refused"
         assert record["phase"] == "ingest"
 
+    def test_reasoning_tokens_captured_when_present(self, tmp_path: Path) -> None:
+        tracker = TelemetryTracker(output_dir=tmp_path)
+        now = _now()
+        tracker.log_success_event(
+            kwargs={"model": "openai/o3", "metadata": {"phase": "agent_reasoning", "actor": "langgraph_node"}},
+            response_obj=_make_mock_response(prompt_tokens=50, completion_tokens=200, reasoning_tokens=150),
+            start_time=now,
+            end_time=now,
+        )
+        record = _read_last_record(tracker.telemetry_path)
+        assert record["reasoning_tokens"] == 150
+
+    def test_reasoning_tokens_defaults_to_zero_when_absent(self, tmp_path: Path) -> None:
+        tracker = TelemetryTracker(output_dir=tmp_path)
+        now = _now()
+        tracker.log_success_event(
+            kwargs={"model": "ollama/gemma4", "metadata": {"phase": "ingest", "actor": "vector_embed"}},
+            response_obj=_make_mock_response(),
+            start_time=now,
+            end_time=now,
+        )
+        record = _read_last_record(tracker.telemetry_path)
+        assert record["reasoning_tokens"] == 0
+
     def test_missing_metadata_uses_untagged(self, tmp_path: Path) -> None:
         tracker = TelemetryTracker(output_dir=tmp_path)
         now = _now()
@@ -220,7 +256,8 @@ class TestRegisterTracker:
 
     def test_register_tracker_sets_litellm_callbacks(self, tmp_path: Path) -> None:
         tracker = register_tracker(output_dir=tmp_path)
-        assert tracker in litellm.callbacks
+        assert tracker in litellm.success_callback
+        assert tracker in litellm.failure_callback
 
     def test_register_tracker_telemetry_path_in_output_dir(self, tmp_path: Path) -> None:
         tracker = register_tracker(output_dir=tmp_path)

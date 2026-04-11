@@ -10,11 +10,11 @@ telemetry:
 # --- Default experiment parameters ---
 # All variants inherit these unless explicitly overridden.
 default:
-  agent_type: "dummy"  # "dummy" | "vector" | "graph"
+  agent_type: "dummy" # "dummy" | "vector" | "graph"
   data_file: "baseline_dummy.json"
 
   llm:
-    model: "ollama/gpt-oss:20b"
+    model: "ollama/gemma4:latest"
     temperature: 0.0
     max_tokens: 2048
 
@@ -45,3 +45,8 @@ variants:
     agent_type: "graph"
     data_file: "multihop_benchmark.json"
     memory_path: "data/processed/graph_v1.json"
+
+  bm25_baseline:
+    agent_type: "bm25"
+    data_file: "baseline_dummy.json"
+    memory_path: "data/processed/bm25_baseline.db"

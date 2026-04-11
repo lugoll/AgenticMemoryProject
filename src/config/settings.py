@@ -66,7 +66,7 @@ class TelemetryConfig(BaseModel):
 
 # ---- Top-level experiment config ----
 
-AgentType = Literal["dummy", "vector", "graph"]
+AgentType = Literal["dummy", "vector", "graph", "bm25"]
 
 
 class ExperimentConfig(BaseModel):
@@ -93,6 +93,15 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[key] = copy.deepcopy(value)
     return result
+
+
+def list_variants(config_path: Path | None = None) -> list[str]:
+    """Return all variant names defined in the YAML config."""
+    if config_path is None:
+        config_path = Path(__file__).parent / "unified_config.yaml"
+    with config_path.open("r") as f:
+        raw = yaml.safe_load(f)
+    return list(raw.get("variants", {}).keys())
 
 
 def load_config(

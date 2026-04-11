@@ -49,4 +49,4 @@ def run_ingest(config: ExperimentConfig, data_dir: Path = Path("data/raw")) -> N
     logger.info("[ingest] Memory reset. Ingesting %d documents…", len(documents))
 
     agent._memory.ingest_documents(documents)
-    logger.info("[ingest] Done. Memory store size = %d", agent._memory.store_size)  # type: ignore[attr-defined]
+    logger.info("[ingest] Done.")
