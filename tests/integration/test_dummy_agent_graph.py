@@ -150,7 +150,7 @@ class TestAgentGraphExecution:
         with patch("litellm.completion", return_value=_mock_completion()):
             response: AgentResponse = agent.run("test")
         assert isinstance(response["run_id"], str)
-        assert len(response["run_id"]) == 8
+        assert len(response["run_id"]) == 36
         assert isinstance(response["question"], str)
         assert isinstance(response["answer"], str)
         assert isinstance(response["context_used"], list)
