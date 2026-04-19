@@ -1,71 +1,36 @@
 # AgenticMemoryProject
 
-A scientific evaluation framework for measuring and optimizing **token efficiency** in autonomous AI agents. The project systematically compares memory architectures — Vector RAG, GraphRAG, and custom implementations — to quantify the tradeoff between ingestion cost and test-time token waste.
+Scientific benchmarking framework comparing three RAG retrieval architectures on token efficiency and answer quality for multi-hop questions.
 
-## The Core Problem
+**Research question:** Which retrieval architecture delivers the best quality-to-token-cost ratio for multi-hop questions?
 
-Standard Vector RAG agents suffer from **context poisoning**: retrieving large amounts of loosely-relevant text bloats the context window, burns tokens on every reasoning step, and degrades answer quality on multi-hop questions. This framework measures that problem precisely and tests whether alternative memory architectures can solve it.
+| Model | Architecture | Role |
+|---|---|---|
+| A | BM25 (keyword search) | Baseline |
+| B | Vector RAG (semantic embeddings) | Industry standard |
+| C | GraphRAG (knowledge graph + vector) | Innovative approach |
+
+Evaluated on HotpotQA (distractor split) measuring Exact Match, F1, and input tokens per query.
 
 ---
 
-## Architecture
+## Quick Start (Docker)
 
-The system has two strictly separated phases. Ingestion is offline and stateless. The agent only runs at test time and never re-ingests.
+**Prerequisites:** Docker Desktop running.
 
-```mermaid
-flowchart TD
-    subgraph Config["Configuration"]
-        YAML["unified_config.yaml"]
-        EC["ExperimentConfig\nagent_type · data_file · memory_path\nllm · embedding · retrieval · ingestion"]
-        YAML -->|load_config| EC
-    end
+```bash
+# 1. Build the application image
+docker compose build
 
-    subgraph CLI["Entry point"]
-        MAIN["main.py\n--variant NAME\n--ingest / --qa"]
-    end
+# 2. Start Ollama and pull the LLM (one-time, ~2 GB)
+docker compose up -d ollama
+docker compose exec ollama ollama pull llama3.2:3b
 
-    subgraph PhaseA["Phase A — Offline Ingestion"]
-        ING["ingest.py\nrun_ingest()"]
-        ING -->|"1. memory.reset()"| MEM
-        ING -->|"2. memory.ingest_documents()"| MEM
-    end
-
-    subgraph PhaseB["Phase B — Agentic QA"]
-        QA["qa.py\nrun_qa()"]
-        QA -->|"agent.run(question)"| AGENT
-
-        subgraph Agent["BaseAgent — LangGraph graph"]
-            RET["retrieve_node\n_search_memory()"]
-            RSN["reason_node\n_reason_node()"]
-            RET -->|retrieved_context| RSN
-        end
-
-        QA -->|"results.jsonl\n(with run_id)"| OUT_QA["evaluations/\n&lt;variant&gt;_results.jsonl"]
-    end
-
-    subgraph Memory["Memory layer"]
-        BASE["BaseMemory ABC\ningest_documents · search\nupdate_fact · reset"]
-        DUMMY["DummyMemory\nsubstring scoring\nfile-backed JSON"]
-        BASE -->|implements| DUMMY
-    end
-
-    subgraph Telemetry["Observability"]
-        LLM["LiteLLM\nlitellm.completion()"]
-        TRK["TelemetryTracker\nLiteLLM callback"]
-        LLM -->|"callback (async)"| TRK
-        TRK -->|"telemetry.jsonl\n(with run_id)"| OUT_T["evaluations/\ntelemetry_&lt;ts&gt;.jsonl"]
-    end
-
-    EC --> MAIN
-    MAIN -->|"build_agent(config)"| ING
-    MAIN -->|"build_agent(config)"| QA
-    RET <-->|search / update_fact| MEM
-    RSN -->|"metadata: run_id · phase · actor"| LLM
-
-    MEM --> BASE
+# 3. Run a variant (ingest documents, then answer questions)
+docker compose run --rm app --variant bm25_baseline --ingest --qa
 ```
 
-**Correlation:** every `agent.run()` generates a unique `run_id` that appears in both output files. Join them on `run_id` to tie token costs to individual questions.
+Results are written to `evaluations/` on your host machine.
 
 ---
 
@@ -73,241 +38,234 @@ flowchart TD
 
 ```
 AgenticMemoryProject/
-├── main.py                      # CLI entry point (--variant, --ingest, --qa)
+├── main.py                          # CLI entry point
+├── Dockerfile                       # Python 3.14-slim + uv
+├── docker-compose.yml               # ollama service + app service
+│
 ├── src/
 │   ├── config/
-│   │   ├── unified_config.yaml  # Single source of truth for all experiment params
-│   │   └── settings.py          # Pydantic models and load_config()
+│   │   ├── unified_config.yaml      # Single source of truth for all experiment params
+│   │   └── settings.py              # Pydantic models, load_config()
 │   │
-│   ├── memory/
-│   │   ├── base.py              # BaseMemory ABC — the agent-facing contract
-│   │   └── model_dummy.py       # DummyMemory — substring scoring, file-backed
+│   ├── memory/                      # Memory backends — all implement BaseMemory
+│   │   ├── base.py                  # Abstract interface (search, ingest, update, reset)
+│   │   ├── model_dummy.py           # DummyMemory — substring scoring, for smoke tests
+│   │   ├── model_bm25.py            # BM25Memory  — SQLite FTS5, no LLM (Model A)
+│   │   ├── model_graph.py           # GraphMemory — LLM entity extraction + BFS (Model C)
+│   │   └── model_vector.py          # VectorMemory — ChromaDB + embeddings (Model B) [TODO]
 │   │
-│   ├── agent/
-│   │   ├── base.py              # BaseAgent — concrete LangGraph graph + LiteLLM node
-│   │   ├── agent_dummy.py       # DummyAgent — wires DummyMemory into BaseAgent
-│   │   └── factory.py           # build_agent(config) — dispatches on agent_type
+│   ├── agent/                       # LangGraph agents — all extend BaseAgent
+│   │   ├── base.py                  # Concrete agent: retrieve → reason graph
+│   │   ├── agent_dummy.py           # Wires DummyMemory
+│   │   ├── agent_bm25.py            # Wires BM25Memory
+│   │   ├── agent_graph.py           # Wires GraphMemory
+│   │   └── factory.py               # build_agent(config) — single dispatch point
 │   │
 │   ├── pipelines/
-│   │   ├── ingest.py            # run_ingest() — reset + ingest documents
-│   │   └── qa.py                # run_qa() — run questions, write results JSONL
+│   │   ├── ingest.py                # Phase A: load dataset → reset → ingest_documents
+│   │   ├── qa.py                    # Phase B: load questions → agent.run() → write JSONL
+│   │   └── evaluate.py              # Phase C: score results JSONL → EM, F1, token cost [TODO]
 │   │
 │   └── telemetry/
-│       └── tracker.py           # TelemetryTracker — LiteLLM callback, JSONL output
+│       └── tracker.py               # LiteLLM callback → telemetry JSONL
 │
 ├── data/
-│   ├── raw/                     # Dataset files (documents + questions, JSON)
-│   └── processed/               # Persisted memory stores (DummyMemory JSON, ChromaDB, etc.)
+│   ├── raw/                         # Input datasets (documents + questions, JSON)
+│   └── processed/                   # Persisted memory stores (SQLite, ChromaDB, JSON graph)
 │
-├── evaluations/                 # Pipeline outputs — never modified by src/ code
-│   ├── telemetry_<ts>.jsonl     # One record per LLM call, keyed by run_id
-│   └── <variant>_<ts>_results.jsonl  # One record per question, keyed by run_id
+├── evaluations/                     # Pipeline outputs — never modified by src/ code
+│   ├── <variant>_<ts>_results.jsonl # One record per question, keyed by run_id
+│   └── <variant>_<ts>_telemetry.jsonl  # One record per LLM call, keyed by run_id
 │
-├── notebooks/                   # EDA and visualization — never imported by pipelines
+├── notebooks/                       # EDA and visualization — never imported by pipelines
 └── tests/
-    ├── unit/                    # No LLM calls, no network (default suite)
-    └── integration/             # Requires live Ollama endpoint; marked @pytest.mark.integration
+    ├── unit/                        # No LLM, no network (default pytest suite)
+    └── integration/                 # Requires live Ollama; run with -m integration
 ```
 
 ---
 
-## Tech Stack
+## Docker Setup
 
-| Layer               | Library                                                | Role                                           |
-| ------------------- | ------------------------------------------------------ | ---------------------------------------------- |
-| Agent orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) | State machine, graph nodes, reasoning loop     |
-| LLM gateway         | [LiteLLM](https://github.com/BerriAI/litellm)          | Unified API for all LLM calls + token tracking |
-| Config              | Pydantic + YAML                                        | Validated, reproducible experiment parameters  |
-| Package management  | [uv](https://github.com/astral-sh/uv)                  | Fast dependency resolution                     |
+### Services
 
----
+**`ollama`** — shared LLM backend. All experiment variants (BM25, Vector, Graph) route their reasoning calls here. Runs persistently in the background; models are stored in the `ollama_models` Docker volume.
 
-## Setup
+**`app`** — the Python pipeline. Runs `main.py` for a single command and exits. Depends on `ollama` being healthy before starting.
+
+### Volumes
+
+| Volume | Contents | Persists across |
+|---|---|---|
+| `ollama_models` | Downloaded LLM weights | Container restarts, rebuilds |
+| `huggingface_cache` | Embedding model weights (~400 MB) | Container restarts, rebuilds |
+| `./data` (bind) | Raw datasets + processed memory stores | Always on host |
+| `./evaluations` (bind) | QA results + telemetry | Always on host |
+
+### Common commands
+
+```bash
+# Start Ollama in the background
+docker compose up -d ollama
+
+# Pull a different LLM (default is llama3.2:3b, set in unified_config.yaml)
+docker compose exec ollama ollama pull llama3.1:8b
+
+# List models available in Ollama
+docker compose exec ollama ollama list
+
+# Run only the ingestion step
+docker compose run --rm app --variant bm25_baseline --ingest
+
+# Run only the QA step (requires prior ingestion)
+docker compose run --rm app --variant bm25_baseline --qa
+
+# Run all variants sequentially
+docker compose run --rm app --variant all --ingest --qa
+
+# Stop Ollama (volumes are preserved)
+docker compose down
+
+# Stop Ollama and delete all volumes (LLM weights will need re-downloading)
+docker compose down -v
+```
+
+### GPU acceleration (optional)
+
+Uncomment the `deploy` block in `docker-compose.yml` under the `ollama` service:
+
+```yaml
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+```
+
+### Local development (without Docker)
 
 ```bash
 uv sync
-
-# Run default test suite (no LLM required)
-uv run pytest -v
-
-# Run integration tests (requires running Ollama with gpt-oss:20b + nomic-embed-text)
-uv run pytest -m integration -v
+uv run pytest                          # unit tests
+uv run python main.py --variant bm25_baseline --ingest --qa
 ```
+
+Requires a local Ollama instance running on `localhost:11434`. The `OLLAMA_API_BASE` environment variable overrides the URL if needed.
 
 ---
 
 ## Running the Pipeline
 
-All pipeline steps go through `main.py`. Pass `--ingest`, `--qa`, or both.
+### Parameters
+
+All pipeline steps go through `main.py`. The full signature:
+
+```
+docker compose run --rm app --variant NAME [--ingest] [--qa]
+                             [--data-dir PATH] [--output-dir PATH] [--config PATH]
+```
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `--variant NAME` | yes | — | Variant name from `unified_config.yaml`, or `all` to run every variant |
+| `--ingest` | at least one | — | Run Phase A: load dataset → reset memory → ingest documents |
+| `--qa` | at least one | — | Run Phase B: load questions → agent.run() → write results JSONL |
+| `--data-dir PATH` | no | `data/raw` | Directory containing raw dataset JSON files |
+| `--output-dir PATH` | no | `evaluations` | Directory where results and telemetry are written |
+| `--config PATH` | no | `src/config/unified_config.yaml` | Path to a custom config YAML |
+
+`--ingest` and `--qa` can be used individually or together. At least one must be passed.
+
+### What happens step by step
+
+Using `docker compose run --rm app --variant bm25_baseline --ingest --qa` as example:
+
+```
+docker compose run --rm app --variant bm25_baseline --ingest --qa
+│
+├── Docker starts the app container (waits for ollama to be healthy)
+│   └── sets OLLAMA_API_BASE=http://ollama:11434
+│
+├── main.py
+│   ├── load_config("bm25_baseline")
+│   │   └── reads unified_config.yaml, deep-merges variant onto defaults
+│   │       → ExperimentConfig(agent_type="bm25", data_file="baseline_dummy.json", ...)
+│   │
+│   ├── register_tracker()
+│   │   └── registers TelemetryTracker as LiteLLM callback
+│   │       → opens evaluations/bm25_baseline_<ts>_telemetry.jsonl
+│   │
+│   ├── --ingest → run_ingest(config)
+│   │   ├── reads data/raw/baseline_dummy.json  → list of document strings
+│   │   ├── build_agent(config)  → BM25Agent  → BM25Memory(storage_path=data/processed/bm25_baseline.db)
+│   │   ├── memory.reset()       → drops + recreates SQLite FTS5 table
+│   │   └── memory.ingest_documents([...])  → INSERT into SQLite (no LLM calls)
+│   │
+│   └── --qa → run_qa(config)
+│       ├── reads data/raw/baseline_dummy.json  → list of questions
+│       ├── build_agent(config)  → BM25Agent  → opens same SQLite file
+│       ├── opens evaluations/bm25_baseline_<ts>_results.jsonl
+│       │
+│       └── for each question:
+│           └── agent.run(question)
+│               ├── retrieve_node
+│               │   └── memory.search(question)
+│               │       └── SQLite FTS5 MATCH query, BM25 ranked, returns top 5 passages
+│               │           (no LLM call)
+│               │
+│               └── reason_node
+│                   └── litellm.completion(model="ollama/llama3.2:3b", ...)
+│                       ├── sends: system prompt + context passages + question
+│                       ├── TelemetryTracker logs: tokens, latency → telemetry.jsonl
+│                       └── returns: answer string → results.jsonl
+```
+
+### Commands
 
 ```bash
-# Step 1 — ingest documents into memory (reads from data/raw/<data_file>)
-python main.py --variant baseline_dummy --ingest
+# Ingest + QA in one step
+docker compose run --rm app --variant bm25_baseline --ingest --qa
 
-# Step 2 — run Q&A, write results to evaluations/
-python main.py --variant baseline_dummy --qa
+# Ingest only (writes to data/processed/)
+docker compose run --rm app --variant bm25_baseline --ingest
 
-# Both steps in sequence
-python main.py --variant baseline_dummy --ingest --qa
+# QA only (requires prior ingestion, writes to evaluations/)
+docker compose run --rm app --variant bm25_baseline --qa
 
-# Custom paths
-python main.py --variant baseline_dummy --ingest --qa \
-    --data-dir data/raw \
-    --output-dir evaluations
+# All variants sequentially
+docker compose run --rm app --variant all --ingest --qa
 ```
 
-Output after `--qa`:
+### Output files
 
-```
-Results saved to: evaluations/baseline_dummy_20260324T190000Z_results.jsonl
-```
+After `--qa`, two files appear in `evaluations/`:
 
-Telemetry is written automatically to `evaluations/telemetry_<session_ts>.jsonl`.
-
----
-
-## Configuration
-
-All experiment parameters live in [`src/config/unified_config.yaml`](src/config/unified_config.yaml). A variant carries only overrides; the loader deep-merges with `default`.
-
-```yaml
-default:
-  agent_type: "dummy" # "dummy" | "vector" | "graph"
-  data_file: "baseline_dummy.json" # file under data/raw/
-  llm:
-    model: "ollama/gpt-oss:20b" # always "provider/model" format
-    temperature: 0.0
-    max_tokens: 2048
-  retrieval:
-    top_k: 5
-  ingestion:
-    chunk_size: 512
-    chunk_overlap: 64
-
-variants:
-  baseline_dummy:
-    agent_type: "dummy"
-    data_file: "baseline_dummy.json"
-    memory_path: "data/processed/baseline_dummy.json" # persist between ingest + qa
+**`<variant>_<timestamp>_results.jsonl`** — one record per question:
+```json
+{
+  "run_id": "1fe02ca4",
+  "variant_name": "bm25_baseline",
+  "agent_type": "bm25",
+  "question": "Who built the Eiffel Tower?",
+  "expected": "Gustave Eiffel",
+  "answer": "Gustave Eiffel.",
+  "context_used": ["The Eiffel Tower is located in Paris..."],
+  "steps_taken": ["retrieve", "reason"],
+  "backend_name": "bm25"
+}
 ```
 
-**Validation rules:**
-
-- All model names must use `provider/model` format (e.g., `ollama/mixtral`). A bare name raises `ValidationError`.
-- `chunk_overlap` must be strictly less than `chunk_size`.
-- `agent_type` must be `"dummy"`, `"vector"`, or `"graph"`.
-
-### Adding a new variant
-
-Add a block under `variants:` and specify only what differs from `default`:
-
-```yaml
-variants:
-  vector_small_chunks:
-    agent_type: "vector"
-    data_file: "full_benchmark.json"
-    memory_path: "data/processed/vector_small.db"
-    llm:
-      model: "openai/gpt-4o-mini"
-    ingestion:
-      chunk_size: 256
-      chunk_overlap: 32
-```
-
-Then run: `python main.py --variant vector_small_chunks --ingest --qa`
-
----
-
-## How the Classes Interact
-
-```mermaid
-classDiagram
-    class ExperimentConfig {
-        +str variant_name
-        +AgentType agent_type
-        +str data_file
-        +str memory_path
-        +LLMConfig llm
-        +RetrievalConfig retrieval
-        +IngestionConfig ingestion
-        +TelemetryConfig telemetry
-    }
-
-    class BaseMemory {
-        <<abstract>>
-        +ingest_documents(documents)
-        +search(query) list~str~
-        +update_fact(fact)
-        +reset()
-        +get_backend_name() str
-    }
-
-    class DummyMemory {
-        -list _store
-        -int _top_k
-        -Path _storage_path
-        +ingest_documents()
-        +search() list~str~
-        +update_fact()
-        +reset()
-    }
-
-    class BaseAgent {
-        -BaseMemory _memory
-        -ExperimentConfig _config
-        -CompiledGraph _graph
-        +run(question) AgentResponse
-        +_search_memory(query) list~str~
-        +_update_memory(fact)
-        #_retrieve_node(state) AgentState
-        #_reason_node(state) AgentState
-        #_build_graph() CompiledGraph
-    }
-
-    class DummyAgent {
-        +get_agent_name() str
-    }
-
-    class TelemetryTracker {
-        -int _call_count
-        -Path _telemetry_path
-        +call_count int
-        +telemetry_path Path
-        +log_success_event()
-        +log_failure_event()
-    }
-
-    BaseMemory <|-- DummyMemory
-    BaseAgent <|-- DummyAgent
-    DummyAgent --> DummyMemory : creates in __init__
-    BaseAgent --> BaseMemory : _memory
-    BaseAgent --> ExperimentConfig : _config
-    BaseAgent ..> TelemetryTracker : via litellm.callbacks
-```
-
-**Key design rules:**
-
-- `BaseAgent` is fully concrete. Subclasses only change the **memory backend** (constructor) or the **system prompt** (`_SYSTEM_PROMPT` class attribute) or the **graph topology** (`_build_graph()` override).
-- `build_agent(config)` in `factory.py` is the only place that maps `agent_type` → concrete agent class. Pipeline code never imports agent classes directly.
-- `BaseMemory` is the only interface the agent ever touches. It has no knowledge of whether `_memory` is `DummyMemory`, `VectorMemory`, or `GraphMemory`.
-- `reset()` must be called before every ingestion run to guarantee a clean baseline.
-
----
-
-## Telemetry
-
-Every LLM call is intercepted by `TelemetryTracker` (a LiteLLM `CustomLogger`) and appended to a JSONL file in `evaluations/`:
-
+**`<variant>_<timestamp>_telemetry.jsonl`** — one record per LLM call:
 ```json
 {
   "event": "llm_call",
-  "timestamp": "2026-03-24T19:02:48Z",
-  "call_index": 3,
-  "run_id": "a1b2c3d4",
+  "run_id": "1fe02ca4",
   "phase": "agent_reasoning",
   "actor": "langgraph_node",
-  "variant_name": "baseline_dummy",
-  "model": "ollama/gpt-oss:20b",
+  "variant_name": "bm25_baseline",
+  "model": "ollama/llama3.2:3b",
   "prompt_tokens": 312,
   "completion_tokens": 48,
   "total_tokens": 360,
@@ -315,100 +273,173 @@ Every LLM call is intercepted by `TelemetryTracker` (a LiteLLM `CustomLogger`) a
 }
 ```
 
-**Required tags** — every LiteLLM call must supply both via the `metadata` argument:
+Join on `run_id` to attribute token costs to individual questions.
 
-| Tag     | Allowed values                                                                        |
-| ------- | ------------------------------------------------------------------------------------- |
-| `phase` | `ingest`, `retrieval_overhead`, `agent_reasoning`, `evaluation`                       |
-| `actor` | `vector_embed`, `graph_extract`, `graph_cypher_gen`, `langgraph_node`, `llm_as_judge` |
+---
 
-Missing tags produce a `WARNING` log and `"UNTAGGED"` in the record, making them easy to find.
+## Configuration
 
-**`call_index`** is a per-session counter (1, 2, 3 …). It lets you sort records chronologically when timestamps are too close to distinguish, and quickly see how many LLM calls a single pipeline run made.
+All experiment parameters live in `src/config/unified_config.yaml`. Variants carry only overrides; the loader deep-merges them with `default`.
 
-**`run_id`** is an 8-char hex identifier generated per `agent.run()` call. It appears in both the telemetry file and the QA results file, so you can join them:
+```yaml
+default:
+  llm:
+    model: "ollama/llama3.2:3b"   # always "provider/model" format
+    temperature: 0.0
+    max_tokens: 2048
+  retrieval:
+    top_k: 5
+  ingestion:
+    chunk_size: 300
+    chunk_overlap: 50
 
-```python
-import json, pandas as pd
-
-tel = pd.DataFrame(
-    json.loads(l) for l in open("evaluations/telemetry_20260324T190248Z.jsonl")
-)
-res = pd.DataFrame(
-    json.loads(l) for l in open("evaluations/baseline_dummy_20260324T190248Z_results.jsonl")
-)
-# token cost per question
-merged = res.merge(tel[["run_id", "total_tokens", "latency_ms"]], on="run_id")
+variants:
+  bm25_baseline:
+    agent_type: "bm25"
+    data_file: "baseline_dummy.json"
+    memory_path: "data/processed/bm25_baseline.db"
 ```
 
-### Registering the tracker
+**Validation rules:**
+- Model names must use `provider/model` format — `ollama/llama3.2:3b`, `openai/gpt-4o`. A bare name raises `ValidationError`.
+- `chunk_overlap` must be strictly less than `chunk_size`.
+- `agent_type` must be one of `dummy`, `bm25`, `vector`, `graph`.
 
-Call `register_tracker()` once before any LLM call. `main.py` does this automatically.
+### Adding a new variant
 
-```python
-from src.telemetry.tracker import register_tracker
-from pathlib import Path
+Add a block under `variants:` with only the fields that differ from `default`:
 
-tracker = register_tracker(
-    log_level="INFO",
-    output_dir=Path("evaluations"),   # telemetry JSONL written here
-)
-# tracker.telemetry_path  → Path to the session file
-# tracker.call_count      → number of successful calls so far
+```yaml
+variants:
+  vector_hotpotqa:
+    agent_type: "vector"
+    data_file: "hotpotqa_distractor.json"
+    memory_path: "data/processed/vector_hotpotqa"
+    ingestion:
+      chunk_size: 300
+      chunk_overlap: 50
+```
+
+Then run:
+```bash
+docker compose run --rm app --variant vector_hotpotqa --ingest --qa
 ```
 
 ---
 
-## Memory Interface
+## Architecture
 
-All backends implement four methods. The agent calls `search` and `update_fact` only; the pipeline calls `reset` and `ingest_documents`.
+### Two-phase separation
 
-```python
-class BaseMemory(ABC):
+The system has two strictly separated phases. Ingestion is offline and stateless. The agent only runs at test time and never triggers re-ingestion.
 
-    def ingest_documents(self, documents: list[str]) -> None:
-        # Phase A — chunk, embed, persist. May call LLM (tag as "ingest").
-        ...
+```
+Phase A — Offline Ingestion
+  Dataset (JSON) → memory.reset() → memory.ingest_documents() → persisted store
 
-    def search(self, query: str) -> list[str]:
-        # Phase B — return plain strings, never backend objects.
-        # Number of results bounded by config.retrieval.top_k.
-        ...
-
-    def update_fact(self, fact: str) -> None:
-        # Phase B — must be immediately searchable after return.
-        ...
-
-    def reset(self) -> None:
-        # Called before every ingest run to clear all persisted state.
-        ...
+Phase B — Agentic QA
+  Question → agent.run() → [retrieve_node → reason_node] → answer + telemetry
 ```
 
-### Adding a new memory backend
+This separation is intentional: GraphRAG ingestion makes many LLM calls for entity extraction. If ingestion ran at test time, those token costs would contaminate the per-question measurements.
+
+### Memory abstraction
+
+The agent never knows which backend it is querying. It only calls two methods:
+
+```python
+memory.search(query)        # retrieve relevant context
+memory.update_fact(fact)    # inject a newly learned fact
+```
+
+`build_agent(config)` in `factory.py` is the only place that maps `agent_type` → concrete implementation.
+
+```
+agent_type = "bm25"   →  BM25Memory   (SQLite FTS5, no LLM)
+agent_type = "vector" →  VectorMemory (ChromaDB + BAAI/bge-base-en-v1.5)
+agent_type = "graph"  →  GraphMemory  (LLM entity extraction + BFS traversal)
+```
+
+### LangGraph graph topology
+
+```
+START → retrieve_node → reason_node → END
+```
+
+`retrieve_node` calls `memory.search(question)` and stores the results in state.
+`reason_node` calls the LLM via LiteLLM with the retrieved context and returns the answer.
+
+Every LLM call is tagged with `phase` and `actor` so token costs can be attributed:
+
+| phase | actor | When |
+|---|---|---|
+| `ingest` | `graph_extract` | GraphRAG entity extraction during ingestion |
+| `agent_reasoning` | `langgraph_node` | Answer generation for all variants |
+| `ingest` | `vector_embed` | Embedding calls during Vector RAG ingestion |
+| `evaluation` | `llm_as_judge` | LLM-based evaluation scoring (planned) |
+
+### Class overview
+
+```
+BaseMemory (ABC)
+├── DummyMemory      — substring scoring, file-backed JSON (smoke tests)
+├── BM25Memory       — SQLite FTS5, BM25 ranking, no LLM
+├── VectorMemory     — ChromaDB, sentence-transformers embeddings [TODO]
+└── GraphMemory      — JSON graph, LLM entity extraction, BFS retrieval
+
+BaseAgent (LangGraph)
+├── DummyAgent       → DummyMemory
+├── BM25Agent        → BM25Memory
+├── VectorAgent      → VectorMemory [TODO]
+└── GraphAgent       → GraphMemory
+```
+
+---
+
+## Telemetry
+
+Every LLM call is intercepted by `TelemetryTracker` (a LiteLLM `CustomLogger`) and written to a JSONL file. The tracker warns on any call missing `phase` or `actor` tags.
+
+**Joining results with token costs:**
+
+```python
+import json
+import pandas as pd
+
+tel = pd.DataFrame(json.loads(l) for l in open("evaluations/bm25_baseline_..._telemetry.jsonl"))
+res = pd.DataFrame(json.loads(l) for l in open("evaluations/bm25_baseline_..._results.jsonl"))
+
+merged = res.merge(tel[["run_id", "total_tokens", "latency_ms"]], on="run_id")
+print(merged[["question", "answer", "total_tokens"]].to_string())
+```
+
+---
+
+## Adding a new memory backend
 
 1. Create `src/memory/model_<name>.py`, subclass `BaseMemory`, implement all four methods.
-2. Tag every internal LLM call with the correct `phase`/`actor` values.
+2. Tag every internal LLM call with the correct `phase` / `actor` via the `metadata` argument to `litellm.completion()`.
 3. Export from `src/memory/__init__.py`.
-4. Add a branch to `src/agent/factory.py`:
+4. Add to `src/agent/factory.py`:
    ```python
    if config.agent_type == "vector":
        from src.memory.model_vector import VectorMemory
        return VectorAgent(memory=VectorMemory(config), config=config)
    ```
-5. Add unit tests in `tests/unit/test_<name>_memory.py` using `test_dummy_memory.py` as template.
+5. Add the variant to `unified_config.yaml`.
+6. Add unit tests in `tests/unit/test_<name>_memory.py`.
 
 ---
 
-## Design Principles
+## Tests
 
-**Never hardcode model names.** Always pull from config. This ensures every run is reproducible and comparable.
+```bash
+# Unit tests (no LLM required, default suite)
+uv run pytest -v
 
-**The agent is backend-agnostic.** Agent code imports `BaseMemory` only. It never imports `VectorMemory`, `GraphMemory`, or anything from LlamaIndex/ChromaDB/Neo4j directly.
+# Integration tests (requires Ollama running with llama3.2:3b)
+uv run pytest -m integration -v
 
-**Tag every LLM call.** An untagged call is a token cost that cannot be attributed, making benchmarking data useless. The tracker warns on every untagged call.
-
-**Phase A and Phase B are separate processes.** Ingestion runs once, offline. The agent must not trigger ingestion at test time — that would contaminate the token counts being measured.
-
-**Reset before every ingest.** Call `memory.reset()` at the start of each ingestion run to guarantee that previous data from failed or partial runs does not pollute results.
-
-**Return plain strings from `search()`.** Backend-specific objects (ChromaDB `Document`, embedding vectors, graph node IDs) must never cross the `BaseMemory` boundary into the agent.
+# With coverage
+uv run pytest --cov=src --cov-report=term-missing
+```

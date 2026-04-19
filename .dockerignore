@@ -1,0 +1,12 @@
+.git/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+.python-version
+data/processed/
+evaluations/
+notebooks/
+*.md
+!README.md

@@ -10,16 +10,17 @@ telemetry:
 # --- Default experiment parameters ---
 # All variants inherit these unless explicitly overridden.
 default:
-  agent_type: "dummy" # "dummy" | "vector" | "graph"
+  agent_type: "dummy" # "dummy" | "bm25" | "vector" | "graph"
   data_file: "baseline_dummy.json"
 
   llm:
-    model: "ollama/gemma4:latest"
+    model: "ollama/llama3.2:3b"  # swap to e.g. ollama/llama3.1:8b for better quality
     temperature: 0.0
     max_tokens: 2048
+    # api_base: resolved automatically from OLLAMA_API_BASE env var (set by docker-compose)
 
   embedding:
-    model: "ollama/nomic-embed-text"
+    model: "huggingface/BAAI/bge-base-en-v1.5"  # local, MIT license, ~400 MB
     batch_size: 32
 
   retrieval:
@@ -27,26 +28,36 @@ default:
     similarity_cutoff: 0.7
 
   ingestion:
-    chunk_size: 512
-    chunk_overlap: 64
+    chunk_size: 300   # HotpotQA supporting facts are short paragraphs (~120 words)
+    chunk_overlap: 50
 
 # --- Named experiment variants ---
-# Each variant inherits all defaults and applies its overrides.
-# agent_type determines which memory backend and agent class is used.
-# data_file points to a JSON file in data/raw/ containing documents and questions.
-# memory_path is where the agent's memory store is persisted between pipeline steps.
+# Each variant inherits all defaults and overrides only what differs.
+# agent_type  → which memory backend and agent class is used (see factory.py)
+# data_file   → JSON file in data/raw/ with "documents" and "questions" keys
+# memory_path → where the memory store is persisted between --ingest and --qa runs
 variants:
+
+  # Smoke test — substring scoring, no LLM, no embeddings
   baseline_dummy:
     agent_type: "dummy"
     data_file: "baseline_dummy.json"
     memory_path: "data/processed/baseline_dummy.json"
 
-  graph_v1:
-    agent_type: "graph"
-    data_file: "multihop_benchmark.json"
-    memory_path: "data/processed/graph_v1.json"
-
+  # Model A — keyword search baseline (SQLite FTS5, BM25 ranking, no LLM at retrieval)
   bm25_baseline:
     agent_type: "bm25"
     data_file: "baseline_dummy.json"
     memory_path: "data/processed/bm25_baseline.db"
+
+  # Model B — Vector RAG (ChromaDB + BAAI/bge-base-en-v1.5 embeddings) [TODO]
+  # vector_rag:
+  #   agent_type: "vector"
+  #   data_file: "hotpotqa_distractor.json"
+  #   memory_path: "data/processed/vector_hotpotqa"
+
+  # Model C — GraphRAG (LLM entity extraction at ingest, BFS at retrieval)
+  graph_v1:
+    agent_type: "graph"
+    data_file: "multihop_benchmark.json"
+    memory_path: "data/processed/graph_v1.json"
