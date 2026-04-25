@@ -34,9 +34,9 @@ def build_agent(config: ExperimentConfig) -> BaseAgent:
         from .agent_bm25 import BM25Agent
         return BM25Agent(config=config)
 
-    # if config.agent_type == "vector":
-    #     from .agent_vector import VectorAgent
-    #     return VectorAgent(config=config)
+    if config.agent_type == "vector":
+        from .agent_vector import VectorAgent
+        return VectorAgent(config=config)
 
     raise ValueError(
         f"Unknown agent_type '{config.agent_type}'. "

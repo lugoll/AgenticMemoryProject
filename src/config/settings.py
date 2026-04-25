@@ -37,6 +37,7 @@ class LLMConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     model: str
     batch_size: int = 32
+    chroma_host: Optional[str] = None
 
     @field_validator("model")
     @classmethod
@@ -46,6 +47,12 @@ class EmbeddingConfig(BaseModel):
                 f"Embedding model '{v}' must use 'provider/model' format"
             )
         return v
+
+    @model_validator(mode="after")
+    def resolve_chroma_host(self) -> "EmbeddingConfig":
+        if self.chroma_host is None:
+            self.chroma_host = os.environ.get("CHROMA_HOST")
+        return self
 
 
 class RetrievalConfig(BaseModel):

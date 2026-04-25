@@ -61,7 +61,7 @@ def run_qa(
     with output_path.open("w", encoding="utf-8") as out:
         for entry in questions:
             question: str = entry.get("question", "")
-            expected: str = entry.get("expected", "")
+            expected: str = entry.get("answer", entry.get("expected", ""))
 
             logger.debug("[qa] Q: %s", question)
             response = agent.run(question)

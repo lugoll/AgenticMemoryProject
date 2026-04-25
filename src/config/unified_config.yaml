@@ -50,11 +50,11 @@ variants:
     data_file: "baseline_dummy.json"
     memory_path: "data/processed/bm25_baseline.db"
 
-  # Model B — Vector RAG (ChromaDB + BAAI/bge-base-en-v1.5 embeddings) [TODO]
-  # vector_rag:
-  #   agent_type: "vector"
-  #   data_file: "hotpotqa_distractor.json"
-  #   memory_path: "data/processed/vector_hotpotqa"
+  # Model B — Vector RAG (ChromaDB HTTP server + BAAI/bge-base-en-v1.5 embeddings)
+  vector_rag:
+    agent_type: "vector"
+    data_file: "hotpotqa_distractor.json"
+    memory_path: "vector_hotpotqa"   # ChromaDB collection name
 
   # Model C — GraphRAG (LLM entity extraction at ingest, BFS at retrieval)
   graph_v1:
