@@ -127,7 +127,7 @@ class BaseAgent:
             },
         ]
 
-        response = litellm.completion(
+        completion_kwargs: dict[str, Any] = dict(
             model=self._config.llm.model,
             messages=messages,
             temperature=self._config.llm.temperature,
@@ -139,6 +139,9 @@ class BaseAgent:
                 "run_id": state["run_id"],
             },
         )
+        if self._config.llm.api_base:
+            completion_kwargs["api_base"] = self._config.llm.api_base
+        response = litellm.completion(**completion_kwargs)
 
         answer: str = response.choices[0].message.content or ""
         logger.debug("%s._reason_node: received %d-char answer", self.get_agent_name(), len(answer))

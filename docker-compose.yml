@@ -1,0 +1,48 @@
+services:
+
+  # ── Shared LLM backend ──────────────────────────────────────────────────────
+  # All experiment variants (BM25, Vector, Graph) route their LLM calls here.
+  # Models are persisted in the ollama_models volume so they survive rebuilds.
+  #
+  # NVIDIA GPU acceleration (optional):
+  # deploy:
+  #   resources:
+  #     reservations:
+  #       devices:
+  #         - driver: nvidia
+  #           count: all
+  #           capabilities: [gpu]
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ── Pipeline application ────────────────────────────────────────────────────
+  # Runs main.py — pass arguments via: docker compose run --rm app --variant NAME --ingest --qa
+  # data/ and evaluations/ are bind-mounted so results persist on the host.
+  # The HuggingFace cache volume avoids re-downloading embedding models on
+  # every container start (~400 MB for BAAI/bge-base-en-v1.5).
+  app:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_API_BASE=http://ollama:11434
+    volumes:
+      - ./data:/app/data
+      - ./evaluations:/app/evaluations
+      - huggingface_cache:/root/.cache/huggingface
+
+volumes:
+  ollama_models:
+  huggingface_cache:

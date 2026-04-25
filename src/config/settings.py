@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -14,6 +15,7 @@ class LLMConfig(BaseModel):
     model: str
     temperature: float = 0.0
     max_tokens: int = 2048
+    api_base: Optional[str] = None
 
     @field_validator("model")
     @classmethod
@@ -24,6 +26,12 @@ class LLMConfig(BaseModel):
                 f"(e.g., 'ollama/mixtral', 'openai/gpt-4o')"
             )
         return v
+
+    @model_validator(mode="after")
+    def resolve_api_base(self) -> "LLMConfig":
+        if self.api_base is None:
+            self.api_base = os.environ.get("OLLAMA_API_BASE")
+        return self
 
 
 class EmbeddingConfig(BaseModel):
