@@ -4,16 +4,15 @@ services:
   # All experiment variants (BM25, Vector, Graph) route their LLM calls here.
   # Models are persisted in the ollama_models volume so they survive rebuilds.
   #
-  # NVIDIA GPU acceleration (optional):
-  # deploy:
-  #   resources:
-  #     reservations:
-  #       devices:
-  #         - driver: nvidia
-  #           count: all
-  #           capabilities: [gpu]
   ollama:
     image: ollama/ollama:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -26,6 +25,21 @@ services:
       retries: 12
       start_period: 30s
 
+  # ── Vector store (Model B only) ─────────────────────────────────────────────
+  # ChromaDB HTTP server for VectorMemory. Runs as a persistent sidecar so the
+  # vector index survives container restarts. Only the vector_rag variant talks
+  # to this service; BM25 and GraphRAG do not depend on it.
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    volumes:
+      - chroma_data:/data
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
   # ── Pipeline application ────────────────────────────────────────────────────
   # Runs main.py — pass arguments via: docker compose run --rm app --variant NAME --ingest --qa
   # data/ and evaluations/ are bind-mounted so results persist on the host.
@@ -36,8 +50,11 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      chromadb:
+        condition: service_started
     environment:
       - OLLAMA_API_BASE=http://ollama:11434
+      - CHROMA_HOST=http://chromadb:8000
     volumes:
       - ./data:/app/data
       - ./evaluations:/app/evaluations
@@ -46,3 +63,4 @@ services:
 volumes:
   ollama_models:
   huggingface_cache:
+  chroma_data:
