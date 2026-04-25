@@ -136,7 +136,7 @@ class GraphMemory(BaseMemory):
                 "run_id": run_id,
             },
         )
-        raw = response.choices[0].message.content or "[]"
+        raw = response.choices[0].message.content or "[]" # type: ignore
         try:
             triples = json.loads(raw)
         except json.JSONDecodeError:
