@@ -85,9 +85,19 @@ class LightRAGConfig(BaseModel):
     max_token_size: int = 8192
 
 
+class VecGraphConfig(BaseModel):
+    embedding_dim: int = 768           # must match embedding.model output dimension
+    extraction_max_tokens: int = 1024
+    dedup_threshold: float = 0.92      # cosine similarity above which a triplet is a duplicate
+    # Entity name dedup: passage-level models (e.g. nomic-embed-text) assign cosine sim 0.83-0.88
+    # to topically-related but distinct entities, so the LLM gate must sit above that band.
+    entity_lm_lower: float = 0.90     # min cosine sim for a candidate to enter LLM selection
+    entity_lm_top_k: int = 5          # max candidates shown to LLM in one selection call
+
+
 # ---- Top-level experiment config ----
 
-AgentType = Literal["dummy", "vector", "graph", "bm25", "lightrag"]
+AgentType = Literal["dummy", "vector", "graph", "bm25", "lightrag", "vecgraph"]
 
 
 class ExperimentConfig(BaseModel):
@@ -102,6 +112,7 @@ class ExperimentConfig(BaseModel):
     ingestion: IngestionConfig
     telemetry: TelemetryConfig
     lightrag: Optional[LightRAGConfig] = None
+    vecgraph: Optional[VecGraphConfig] = None
 
 
 # ---- Loader ----

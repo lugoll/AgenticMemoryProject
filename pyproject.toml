@@ -22,6 +22,7 @@ dependencies = [
 app = [
     "chromadb-client>=0.6,<1",
     "datasets>=3.0,<4",
+    "faiss-cpu>=1.8,<2",
     # sentence-transformers is installed separately in Dockerfile
     # via the PyTorch CPU index to avoid ~2 GB of CUDA libraries.
 ]

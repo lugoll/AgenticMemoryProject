@@ -42,6 +42,10 @@ def build_agent(config: ExperimentConfig) -> BaseAgent:
         from .agent_lightrag import LightRAGAgent
         return LightRAGAgent(config=config)
 
+    if config.agent_type == "vecgraph":
+        from .agent_vecgraph import VecGraphAgent
+        return VecGraphAgent(config=config)
+
     raise ValueError(
         f"Unknown agent_type '{config.agent_type}'. "
         f"Add a branch to src/agent/factory.py to support it."
