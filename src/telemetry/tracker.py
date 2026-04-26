@@ -209,9 +209,16 @@ def register_tracker(
         call_count and telemetry_path in tests).
     """
     tracker = TelemetryTracker(log_level=log_level, output_dir=output_dir, variant_name=variant_name)
-    # litellm.callbacks is the correct registration point for CustomLogger subclasses.
-    # Directly assigning litellm.success_callback only covers sync calls; async calls
-    # (acompletion / aembedding) dispatch through litellm._async_success_callback, which
-    # is only populated when you go through litellm.callbacks.
+    # LiteLLM 1.83+ deduplicates CustomLogger subclasses by class name + non-private
+    # attributes. Because all TelemetryTracker attrs are private (_-prefixed), every
+    # instance gets the same key, so re-registration is silently rejected. We evict
+    # stale instances from litellm's internal lists before adding the new tracker so
+    # each call to register_tracker() truly replaces the previous one.
+    litellm.success_callback[:] = [
+        cb for cb in litellm.success_callback if not isinstance(cb, TelemetryTracker)
+    ]
+    litellm._async_success_callback[:] = [
+        cb for cb in litellm._async_success_callback if not isinstance(cb, TelemetryTracker)
+    ]
     litellm.callbacks = [tracker]
     return tracker
