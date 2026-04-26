@@ -37,6 +37,10 @@ def build_agent(config: ExperimentConfig) -> BaseAgent:
     if config.agent_type == "vector":
         from .agent_vector import VectorAgent
         return VectorAgent(config=config)
+    
+    if config.agent_type == "lightrag":
+        from .agent_lightrag import LightRAGAgent
+        return LightRAGAgent(config=config)
 
     raise ValueError(
         f"Unknown agent_type '{config.agent_type}'. "

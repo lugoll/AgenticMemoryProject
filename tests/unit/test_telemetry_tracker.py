@@ -256,8 +256,7 @@ class TestRegisterTracker:
 
     def test_register_tracker_sets_litellm_callbacks(self, tmp_path: Path) -> None:
         tracker = register_tracker(output_dir=tmp_path)
-        assert tracker in litellm.success_callback
-        assert tracker in litellm.failure_callback
+        assert tracker in litellm.callbacks
 
     def test_register_tracker_telemetry_path_in_output_dir(self, tmp_path: Path) -> None:
         tracker = register_tracker(output_dir=tmp_path)

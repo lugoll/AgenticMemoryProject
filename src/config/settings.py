@@ -79,9 +79,15 @@ class TelemetryConfig(BaseModel):
     output_dir: str = "evaluations/"
 
 
+class LightRAGConfig(BaseModel):
+    query_mode: Literal["hybrid"] = "hybrid"   # local | global | hybrid | naive | mix
+    embedding_dim: int = 768     # must match embedding.model output dimension
+    max_token_size: int = 8192
+
+
 # ---- Top-level experiment config ----
 
-AgentType = Literal["dummy", "vector", "graph", "bm25"]
+AgentType = Literal["dummy", "vector", "graph", "bm25", "lightrag"]
 
 
 class ExperimentConfig(BaseModel):
@@ -95,6 +101,7 @@ class ExperimentConfig(BaseModel):
     retrieval: RetrievalConfig
     ingestion: IngestionConfig
     telemetry: TelemetryConfig
+    lightrag: Optional[LightRAGConfig] = None
 
 
 # ---- Loader ----

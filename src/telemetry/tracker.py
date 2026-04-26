@@ -209,6 +209,9 @@ def register_tracker(
         call_count and telemetry_path in tests).
     """
     tracker = TelemetryTracker(log_level=log_level, output_dir=output_dir, variant_name=variant_name)
-    litellm.success_callback = [tracker]
-    litellm.failure_callback = [tracker]
+    # litellm.callbacks is the correct registration point for CustomLogger subclasses.
+    # Directly assigning litellm.success_callback only covers sync calls; async calls
+    # (acompletion / aembedding) dispatch through litellm._async_success_callback, which
+    # is only populated when you go through litellm.callbacks.
+    litellm.callbacks = [tracker]
     return tracker

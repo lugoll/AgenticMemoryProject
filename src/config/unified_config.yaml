@@ -14,13 +14,13 @@ default:
   data_file: "baseline_dummy.json"
 
   llm:
-    model: "ollama/llama3.2:3b"  # swap to e.g. ollama/llama3.1:8b for better quality
+    model: "ollama/llama3.2:3b" # swap to e.g. ollama/llama3.1:8b for better quality
     temperature: 0.0
     max_tokens: 2048
     # api_base: resolved automatically from OLLAMA_API_BASE env var (set by docker-compose)
 
   embedding:
-    model: "huggingface/BAAI/bge-base-en-v1.5"  # local, MIT license, ~400 MB
+    model: "huggingface/BAAI/bge-base-en-v1.5" # local, MIT license, ~400 MB
     batch_size: 32
 
   retrieval:
@@ -28,7 +28,7 @@ default:
     similarity_cutoff: 0.7
 
   ingestion:
-    chunk_size: 300   # HotpotQA supporting facts are short paragraphs (~120 words)
+    chunk_size: 300 # HotpotQA supporting facts are short paragraphs (~120 words)
     chunk_overlap: 50
 
 # --- Named experiment variants ---
@@ -37,7 +37,6 @@ default:
 # data_file   → JSON file in data/raw/ with "documents" and "questions" keys
 # memory_path → where the memory store is persisted between --ingest and --qa runs
 variants:
-
   # Smoke test — substring scoring, no LLM, no embeddings
   baseline_dummy:
     agent_type: "dummy"
@@ -54,10 +53,19 @@ variants:
   vector_rag:
     agent_type: "vector"
     data_file: "hotpotqa_distractor.json"
-    memory_path: "vector_hotpotqa"   # ChromaDB collection name
+    memory_path: "vector_hotpotqa" # ChromaDB collection name
 
   # Model C — GraphRAG (LLM entity extraction at ingest, BFS at retrieval)
   graph_v1:
     agent_type: "graph"
     data_file: "multihop_benchmark.json"
     memory_path: "data/processed/graph_v1.json"
+
+  lightrag_v1:
+    agent_type: "lightrag"
+    data_file: "multihop_benchmark.json"
+    memory_path: "data/processed/lightrag_v1" # directory — LightRAG stores graph + vectors here
+    lightrag:
+      query_mode: "hybrid"
+      embedding_dim: 768 # matches ollama/nomic-embed-text
+      max_token_size: 8192
