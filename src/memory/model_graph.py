@@ -141,7 +141,7 @@ class GraphMemory(BaseMemory):
             triples = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning(
-                "GraphMemory: could not parse LLM response as JSON: %r", raw[:200]
+                "GraphMemory: could not parse LLM response as JSON: %r", raw
             )
             return []
 

@@ -10,11 +10,11 @@ telemetry:
 # --- Default experiment parameters ---
 # All variants inherit these unless explicitly overridden.
 default:
-  agent_type: "dummy" # "dummy" | "bm25" | "vector" | "graph"
+  agent_type: "dummy" # "dummy" | "bm25" | "vector" | "graph" | "lightrag" | "vecgraph"
   data_file: "baseline_dummy.json"
 
   llm:
-    model: "ollama/llama3.2:3b" # swap to e.g. ollama/llama3.1:8b for better quality
+    model: "ollama/gpt-oss:20b" # swap to e.g. ollama/llama3.1:8b for better quality
     temperature: 0.0
     max_tokens: 2048
     # api_base: resolved automatically from OLLAMA_API_BASE env var (set by docker-compose)
@@ -61,6 +61,7 @@ variants:
     data_file: "multihop_benchmark.json"
     memory_path: "data/processed/graph_v1.json"
 
+  # Model D - LightRAG (A mixture of graph retrieval with keyword extraction and embedding lookup)
   lightrag_v1:
     agent_type: "lightrag"
     data_file: "multihop_benchmark.json"
@@ -69,3 +70,19 @@ variants:
       query_mode: "hybrid"
       embedding_dim: 768 # matches ollama/nomic-embed-text
       max_token_size: 8192
+
+  # Model E — VecGraph (append-only entity/relation ledger + shared FAISS index on facts + relations)
+  vecgraph_v1:
+    agent_type: "vecgraph"
+    embedding:
+      model: "ollama/nomic-embed-text"
+    data_file: "multihop_benchmark.json"
+    memory_path: "data/processed/vecgraph_v1"
+    vecgraph:
+      embedding_dim: 768
+      extraction_max_tokens: 1024
+      dedup_threshold: 0.92
+      # nomic-embed-text topic-related distinct entities reach cos-sim ~0.83-0.88,
+      # so the LLM gate must sit above that band.
+      entity_lm_lower: 0.90
+      entity_lm_top_k: 5
