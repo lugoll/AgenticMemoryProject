@@ -16,6 +16,8 @@ env/
 .uv/
 
 # Data layer — never commit datasets or persisted indices
+data/hotpotqa.json
+data/stores/
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
