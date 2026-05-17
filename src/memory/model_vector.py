@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING
 
+from src.config.cfg import Config
 from .base import BaseMemory
-
-if TYPE_CHECKING:
-    from src.config.settings import ExperimentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -49,24 +46,26 @@ class VectorMemory(BaseMemory):
     same ChromaDB server without collision.
     """
 
-    def __init__(self, config: ExperimentConfig) -> None:
+    def __init__(self, config: Config) -> None:
         # Lazy imports: chromadb and sentence-transformers are Docker-only deps.
         # Importing here (not at module level) lets other modules import
         # model_vector without these packages being installed locally.
         import chromadb
         from sentence_transformers import SentenceTransformer
+        from urllib.parse import urlparse
 
         self._config = config
-        self._collection_name: str = config.memory_path or "vector_default"
+        self._collection_name: str = config.stores.vector
 
-        # Strip "huggingface/" prefix — SentenceTransformer expects bare model ID.
-        raw_model: str = config.embedding.model
-        model_id = raw_model.removeprefix("huggingface/")
+        self._encoder = SentenceTransformer(config.embedding.model, device="cpu")
 
-        self._encoder = SentenceTransformer(model_id, device="cpu")
-
-        chroma_host = config.embedding.chroma_host or "http://localhost:8000"
-        self._client = chromadb.HttpClient(host=chroma_host)
+        # chromadb-client 1.x HttpClient expects host/port separately
+        parsed = urlparse(config.embedding.chroma_host)
+        self._client = chromadb.HttpClient(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 8000,
+            ssl=(parsed.scheme == "https"),
+        )
 
         self._collection = self._client.get_or_create_collection(
             name=self._collection_name,
@@ -74,7 +73,7 @@ class VectorMemory(BaseMemory):
         )
         logger.debug(
             "VectorMemory: connected to %s, collection=%r, size=%d",
-            chroma_host,
+            config.embedding.chroma_host,
             self._collection_name,
             self._collection.count(),
         )

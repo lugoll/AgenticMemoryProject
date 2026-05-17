@@ -10,10 +10,11 @@ llm:
   ingest:
     # Gleicher Container wie agent — läuft sequenziell, nie gleichzeitig mit agent/judge.
     # Structured Output via Ollama JSON Schema (llama.cpp grammar-based).
+    # 512 Tokens: max 8 Triples à ~50 Token + Overhead; Fallback-Regex bei Truncation.
     model: "ollama/llama3.1:8b"
     base_url: "http://localhost:11434"
     temperature: 0.0
-    max_tokens: 128
+    max_tokens: 512
   judge:
     # Andere Model-Family → kein Self-Enhancement-Bias.
     # Structured Output via Ollama JSON Schema → gibt CORRECT / PARTIAL / INCORRECT zurück.
