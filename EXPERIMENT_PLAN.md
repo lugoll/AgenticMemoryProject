@@ -222,49 +222,41 @@ notebooks/02_results_analysis.ipynb
 
 ### 0.D — Infrastruktur (Docker)
 
-> Drei Services: ChromaDB (Vektordatenbank), vllm-agent (Llama, Ingest + QA), vllm-judge (Qwen2.5, Evaluation).
-> Zwei 8B-Modelle gleichzeitig: ~16 GB VRAM benötigt.
+> Drei Services: ChromaDB, ollama-agent (Llama 3.1 8B), ollama-judge (Qwen2.5 7B).
+> vLLM unterstützt RTX 5000 (sm_120) nicht in stabilen Releases — Ollama nutzt llama.cpp
+> mit automatischer GPU-Erkennung und unterstützt Blackwell nativ.
+> Structured Output via Ollama JSON Schema (llama.cpp grammar-based, funktional äquivalent).
 
-| Service | Image | Port | Zweck |
-|---|---|---|---|
-| `chromadb` | `chromadb/chroma` | 8000 | Vektordatenbank für Vector RAG |
-| `vllm-agent` | `vllm/vllm-openai` | 8001 | Graph-Ingest + Agent (Llama-3.1-8B) |
-| `vllm-judge` | `vllm/vllm-openai` | 8002 | LLM-as-Judge (Qwen2.5-7B) |
+| Service | Image | Port | Modell | Zweck |
+|---|---|---|---|---|
+| `chromadb` | `chromadb/chroma:0.6.3` | 8000 | — | Vektordatenbank |
+| `ollama-agent` | `ollama/ollama:latest` | 11434 | llama3.1:8b | Graph-Ingest + Agent |
+| `ollama-judge` | `ollama/ollama:latest` | 11435 | qwen2.5:7b | LLM-as-Judge |
 
-- [ ] **0.18** `.env` anlegen (`.gitignore` wurde bereits in 0.15 aktualisiert):
-  ```bash
-  HF_TOKEN=hf_...   # HuggingFace API Token
-  ```
-
-- [ ] **0.19** `docker-compose.yml` schreiben (komplettes File von Null):
+- [ ] **0.18** `docker-compose.yml` schreiben (liegt bereits im Repo):
   ```yaml
   services:
     chromadb:
-      image: chromadb/chroma:0.6.3      # Version pinnen für Reproduzierbarkeit
+      image: chromadb/chroma:0.6.3
       container_name: chromadb
       ports:
         - "8000:8000"
       volumes:
         - chroma_data:/chroma/chroma
       environment:
-        - IS_PERSISTENT=TRUE            # Index überlebt Container-Restart
+        - IS_PERSISTENT=TRUE
         - ANONYMIZED_TELEMETRY=FALSE
+      restart: unless-stopped
 
-    vllm-agent:
-      image: vllm/vllm-openai:latest
-      container_name: vllm-agent
-      runtime: nvidia
-      environment:
-        - NVIDIA_VISIBLE_DEVICES=all
-        - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      volumes:
-        - vllm_agent_cache:/root/.cache/huggingface
+    ollama-agent:
+      image: ollama/ollama:latest
+      container_name: ollama-agent
       ports:
-        - "8001:8000"
-      command: >
-        --model meta-llama/Llama-3.1-8B-Instruct
-        --guided-decoding-backend outlines
-        --max-model-len 4096
+        - "11434:11434"
+      volumes:
+        - ollama_agent_models:/root/.ollama
+      environment:
+        - OLLAMA_KEEP_ALIVE=10m
       deploy:
         resources:
           reservations:
@@ -272,22 +264,17 @@ notebooks/02_results_analysis.ipynb
               - driver: nvidia
                 count: 1
                 capabilities: [gpu]
+      restart: unless-stopped
 
-    vllm-judge:
-      image: vllm/vllm-openai:latest
-      container_name: vllm-judge
-      runtime: nvidia
-      environment:
-        - NVIDIA_VISIBLE_DEVICES=all
-        - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-      volumes:
-        - vllm_judge_cache:/root/.cache/huggingface
+    ollama-judge:
+      image: ollama/ollama:latest
+      container_name: ollama-judge
       ports:
-        - "8002:8000"
-      command: >
-        --model Qwen/Qwen2.5-7B-Instruct
-        --guided-decoding-backend outlines
-        --max-model-len 4096
+        - "11435:11434"
+      volumes:
+        - ollama_judge_models:/root/.ollama
+      environment:
+        - OLLAMA_KEEP_ALIVE=10m
       deploy:
         resources:
           reservations:
@@ -295,65 +282,65 @@ notebooks/02_results_analysis.ipynb
               - driver: nvidia
                 count: 1
                 capabilities: [gpu]
+      restart: unless-stopped
 
   volumes:
     chroma_data:
-    vllm_agent_cache:
-    vllm_judge_cache:
+    ollama_agent_models:
+    ollama_judge_models:
   ```
 
 ---
 
 ### 0.E — Services starten & verifizieren
 
-- [ ] **0.20** Alle Services starten:
+- [ ] **0.19** Alle Services starten:
   ```bash
-  docker compose up -d chromadb    # zuerst ChromaDB (startet sofort)
-  docker compose up -d vllm-agent  # Modell-Download ~8GB, dauert einige Minuten
-  docker compose up -d vllm-judge  # Modell-Download ~8GB
+  docker compose up -d
   ```
 
-- [ ] **0.21** Warten bis vLLM-Container bereit sind:
+- [ ] **0.20** Modelle laden (einmalig — Ollama zieht aus eigenem Registry, kein HF Token nötig):
   ```bash
-  docker logs vllm-agent --follow  # warten auf: "Application startup complete"
-  docker logs vllm-judge --follow
+  docker exec ollama-agent ollama pull llama3.1:8b   # ~5GB
+  docker exec ollama-judge ollama pull qwen2.5:7b    # ~5GB
   ```
 
-- [ ] **0.22** ChromaDB prüfen:
+- [ ] **0.21** ChromaDB prüfen:
   ```bash
   curl http://localhost:8000/api/v1/heartbeat
   # Erwartet: {"nanosecond heartbeat": ...}
   ```
 
-- [ ] **0.23** vLLM-Container prüfen:
+- [ ] **0.22** Ollama-Container prüfen:
   ```bash
-  curl http://localhost:8001/v1/models
-  curl http://localhost:8002/v1/models
-  # Erwartet: JSON mit dem jeweiligen Modellnamen
+  curl http://localhost:11434/api/tags   # zeigt geladene Modelle auf ollama-agent
+  curl http://localhost:11435/api/tags   # zeigt geladene Modelle auf ollama-judge
   ```
 
-- [ ] **0.24** End-to-End Smoke-Test (Python):
+- [ ] **0.23** End-to-End Smoke-Test (Python):
   ```python
   import litellm
 
   # Agent-Container
   r = litellm.completion(
-      model="openai/meta-llama/Llama-3.1-8B-Instruct",
-      api_base="http://localhost:8001/v1",
+      model="ollama/llama3.1:8b",
+      api_base="http://localhost:11434",
       messages=[{"role": "user", "content": "Reply with one word: ready"}],
       max_tokens=5,
   )
   print("Agent:", r.choices[0].message.content)
 
-  # Judge-Container mit Guided Decoding
+  # Judge-Container mit JSON Schema (Ollama grammar-based structured output)
   r = litellm.completion(
-      model="openai/Qwen/Qwen2.5-7B-Instruct",
-      api_base="http://localhost:8002/v1",
-      messages=[{"role": "user", "content": "Is 2+2=4 correct?"}],
+      model="ollama/qwen2.5:7b",
+      api_base="http://localhost:11435",
+      messages=[{"role": "user", "content": "Is 2+2=4 correct? Reply with one word."}],
       max_tokens=5,
-      extra_body={"guided_choice": ["CORRECT", "PARTIAL", "INCORRECT"]},
+      response_format={"type": "json_schema", "json_schema": {
+          "schema": {"type": "string", "enum": ["CORRECT", "PARTIAL", "INCORRECT"]}
+      }},
   )
-  print("Judge:", r.choices[0].message.content)  # garantiert einer der drei Strings
+  print("Judge:", r.choices[0].message.content)
   ```
 
 ---
@@ -927,9 +914,9 @@ Phase 1 und Phase 2 (NetworkX-Refactor in model_graph.py) können parallel laufe
 | `max_hops` (Graph) | 3 | HotpotQA hat bis zu 3-Hop-Ketten |
 | `top_k` (Retrieval) | 5 | Standard in RAG-Literatur |
 | `similarity_cutoff` (Vector) | 0.5 | 0.7 zu restriktiv für Multi-Hop |
-| LLM Agent | `Llama-3.1-8B-Instruct` · vLLM Port 8001 | vLLM Guided Decoding, hoher Durchsatz |
-| LLM Ingest (Graph-Extraktion) | `Llama-3.1-8B-Instruct` · vLLM Port 8001 | gleicher Container wie Agent, sequenziell |
-| LLM Judge | `Qwen2.5-7B-Instruct` · vLLM Port 8002 | andere Model-Family → kein Self-Enhancement-Bias |
+| LLM Agent | `llama3.1:8b` · Ollama Port 11434 | Ollama JSON Schema Structured Output |
+| LLM Ingest (Graph-Extraktion) | `llama3.1:8b` · Ollama Port 11434 | gleicher Container wie Agent, sequenziell |
+| LLM Judge | `qwen2.5:7b` · Ollama Port 11435 | andere Model-Family → kein Self-Enhancement-Bias |
 | Graph-Ingest parallel | `max_workers=4` bei N>100 | Laufzeit N=300: ~4h statt ~15h |
 
 ---

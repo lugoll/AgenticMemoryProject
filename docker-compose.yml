@@ -3,7 +3,6 @@ services:
   # ── Vector store ─────────────────────────────────────────────────────────────
   # ChromaDB HTTP server für VectorMemory.
   # IS_PERSISTENT=TRUE: Index überlebt Container-Restart.
-  # Version gepinnt für Reproduzierbarkeit.
   chromadb:
     image: chromadb/chroma:0.6.3
     container_name: chromadb
@@ -17,25 +16,19 @@ services:
     restart: unless-stopped
 
   # ── LLM Agent + Ingest ───────────────────────────────────────────────────────
-  # Llama-3.1-8B-Instruct für QA-Agent und Graph-Triple-Extraktion.
-  # Guided Decoding via outlines erzwingt valides JSON bei der Extraktion.
-  # Modell wird beim ersten Start automatisch von HuggingFace geladen (~8GB).
-  # HF_TOKEN in .env erforderlich — Llama 3.1 ist ein gated Model.
-  vllm-agent:
-    image: vllm/vllm-openai:latest
-    container_name: vllm-agent
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    volumes:
-      - vllm_agent_cache:/root/.cache/huggingface
+  # Llama-3.1-8B für QA-Agent und Graph-Triple-Extraktion (sequential, nie gleichzeitig).
+  # Structured Output via Ollama JSON Schema (llama.cpp grammar, equivalent zu guided decoding).
+  # Modelle werden nach Container-Start per `docker exec ollama-agent ollama pull` geladen.
+  # OLLAMA_KEEP_ALIVE: Modell bleibt 10min im VRAM — bei 16GB VRAM reicht das für sequenziellen Betrieb.
+  ollama-agent:
+    image: ollama/ollama:latest
+    container_name: ollama-agent
     ports:
-      - "8001:8000"
-    command: >
-      --model meta-llama/Llama-3.1-8B-Instruct
-      --guided-decoding-backend outlines
-      --max-model-len 4096
+      - "11434:11434"
+    volumes:
+      - ollama_agent_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=10m
     deploy:
       resources:
         reservations:
@@ -43,28 +36,21 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    ipc: host
+    restart: unless-stopped
 
   # ── LLM Judge ────────────────────────────────────────────────────────────────
-  # Qwen2.5-7B-Instruct für LLM-as-Judge Evaluation.
+  # Qwen2.5-7B für LLM-as-Judge Evaluation.
   # Andere Model-Family als Agent → kein Self-Enhancement-Bias.
-  # guided_choice erzwingt exakt CORRECT / PARTIAL / INCORRECT.
-  # Modell wird beim ersten Start automatisch von HuggingFace geladen (~8GB).
-  vllm-judge:
-    image: vllm/vllm-openai:latest
-    container_name: vllm-judge
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
-    volumes:
-      - vllm_judge_cache:/root/.cache/huggingface
+  # Läuft nur während Phase 4 (Evaluation) — nicht gleichzeitig mit ollama-agent aktiv.
+  ollama-judge:
+    image: ollama/ollama:latest
+    container_name: ollama-judge
     ports:
-      - "8002:8000"
-    command: >
-      --model Qwen/Qwen2.5-7B-Instruct
-      --guided-decoding-backend outlines
-      --max-model-len 4096
+      - "11435:11434"
+    volumes:
+      - ollama_judge_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=10m
     deploy:
       resources:
         reservations:
@@ -72,9 +58,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    ipc: host
+    restart: unless-stopped
 
 volumes:
   chroma_data:
-  vllm_agent_cache:
-  vllm_judge_cache:
+  ollama_agent_models:
+  ollama_judge_models:
