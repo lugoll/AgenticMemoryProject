@@ -6,19 +6,25 @@ llm:
     model: "ollama/llama3.1:8b"
     base_url: "http://localhost:11434"
     temperature: 0.0
-    max_tokens: 256
+    max_tokens: 512
   ingest:
     # Gleicher Container wie agent — läuft sequenziell, nie gleichzeitig mit agent/judge.
     # Structured Output via Ollama JSON Schema (llama.cpp grammar-based).
-    # 512 Tokens: max 8 Triples à ~50 Token + Overhead; Fallback-Regex bei Truncation.
+    # 1024 Tokens: max 20 Triples à ~45 Token + Overhead; Fallback-Regex bei Truncation.
+    # War 512 → erhöht auf 1024 (2026-05-25): Analyse zeigte dass bei Artikeln mit
+    # vielen Entitäten (30+ Gäste, Ensemblefilme) das 10-Triple-Limit zu früh abschnitt.
+    # Direkte Auswirkung: ~15 von 24 "in-graph-but-not-returned"-Fällen (50-Fragen-Run).
     model: "ollama/llama3.1:8b"
     base_url: "http://localhost:11434"
     temperature: 0.0
-    max_tokens: 512
+    max_tokens: 1024
   judge:
-    # Andere Model-Family → kein Self-Enhancement-Bias.
-    # Structured Output via Ollama JSON Schema → gibt CORRECT / PARTIAL / INCORRECT zurück.
-    model: "ollama/qwen2.5:7b"
+    # Andere Model-Family als Agent (Qwen vs. Llama) → kein Self-Enhancement-Bias.
+    # 14B statt 7B (2026-05-25): 16GB VRAM erlaubt kein gleichzeitiges Laden zweier 14B-Modelle,
+    # aber Judge läuft ausschließlich in 04_evaluate.py — sequenziell nach Agent. Mit
+    # OLLAMA_KEEP_ALIVE=0 am Judge-Container wird das Agent-Modell vorher entladen.
+    # Nutzen: bessere Urteilsqualität bei grenzwertigen Antworten; betrifft alle Varianten gleich.
+    model: "ollama/qwen2.5:14b"
     base_url: "http://localhost:11435"
     temperature: 0.0
     max_tokens: 5
@@ -40,6 +46,8 @@ ingestion:
 
 graph:
   max_hops: 3                # HotpotQA braucht bis zu 3 Hops
+  top_k: 10                  # Graph-Triples sind kurz (~8 Wörter) vs. Textpassagen (~50 Wörter)
+                             # bei top_k=5 fehlt Hop 2 fast immer im Context
 
 stores:
   bm25: "data/stores/bm25.db"

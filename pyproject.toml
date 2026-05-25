@@ -12,6 +12,7 @@ dependencies = [
     "datasets>=3.0,<4",
     "chromadb-client>=1.0",
     "sentence-transformers>=3.0",
+    "rank-bm25>=0.2.2",
 ]
 
 [build-system]

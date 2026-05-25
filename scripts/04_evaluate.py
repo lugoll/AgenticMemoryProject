@@ -23,6 +23,7 @@ import litellm
 
 from src.config.cfg import load_config
 from src.telemetry.tracker import register_tracker
+from src.utils.docker_utils import ensure_containers_running, stop_containers
 
 # ── Normalisierung (Standard HotpotQA-Metrik) ────────────────────────────────
 
@@ -53,14 +54,24 @@ def f1_score(pred: str, gold: str) -> float:
 
 # ── LLM-as-Judge ─────────────────────────────────────────────────────────────
 
-_JUDGE_SYSTEM = "You are an evaluation judge. Reply only with CORRECT, PARTIAL, or INCORRECT."
+_JUDGE_SYSTEM = (
+    "You are a strict evaluation judge for a question-answering benchmark. "
+    "Reply with exactly one word: CORRECT, PARTIAL, or INCORRECT."
+)
 
 _JUDGE_USER = """\
 Question:       {question}
 Correct answer: {expected}
 Model answer:   {answer}
 
-Is the model's answer correct? Consider synonyms and partial phrasings.
+Grading rules — apply in order:
+1. INCORRECT — if the model says "I don't know", gives a wrong answer, or contradicts the correct answer.
+2. CORRECT   — if the model answer contains the correct answer, even with extra words or explanation.
+   Extra context does NOT downgrade to PARTIAL.
+   Synonyms and minor reformulations count as CORRECT.
+3. PARTIAL   — only if the model gives a relevant but genuinely incomplete answer
+   (e.g. names one person when two are required, or gives a vague hint without the actual answer).
+
 Verdict:"""
 
 _VERDICT_RE = re.compile(r"\b(CORRECT|PARTIAL|INCORRECT)\b")
@@ -238,29 +249,41 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     use_judge = not args.no_judge
+
+    # Start ollama-judge only if using LLM-as-Judge
     if use_judge:
-        register_tracker(output_dir=output_dir, variant_name="judge")
+        print("Starting ollama-judge for evaluation...")
+        ensure_containers_running(["ollama-judge"])
 
-    if args.all:
-        result_files = sorted(output_dir.glob("*_results.jsonl"))
-        # Alte Dateien mit anderer Namenskonvention ausschließen
-        result_files = [f for f in result_files if "_baseline_" not in f.name and "_rag_" not in f.name]
-    else:
-        result_files = [Path(p) for p in args.results]
+    try:
+        if use_judge:
+            register_tracker(output_dir=output_dir, variant_name="judge")
 
-    if not result_files:
-        print("Keine results.jsonl gefunden.")
-        return
+        if args.all:
+            result_files = sorted(output_dir.glob("*_results.jsonl"))
+            # Alte Dateien mit anderer Namenskonvention ausschließen
+            result_files = [f for f in result_files if "_baseline_" not in f.name and "_rag_" not in f.name]
+        else:
+            result_files = [Path(p) for p in args.results]
 
-    print(f"Evaluiere {len(result_files)} Datei(en)  |  Judge: {'ja' if use_judge else 'nein'}\n")
+        if not result_files:
+            print("Keine results.jsonl gefunden.")
+            return
 
-    all_scores: dict[str, list[dict]] = {}
-    for path in result_files:
-        variant, scores = evaluate_file(path, output_dir, cfg, use_judge)
-        # Mehrere Dateien pro Variante zusammenfassen
-        all_scores.setdefault(variant, []).extend(scores)
+        print(f"Evaluiere {len(result_files)} Datei(en)  |  Judge: {'ja' if use_judge else 'nein'}\n")
 
-    build_summary(all_scores, output_dir, cfg)
+        all_scores: dict[str, list[dict]] = {}
+        for path in result_files:
+            variant, scores = evaluate_file(path, output_dir, cfg, use_judge)
+            # Mehrere Dateien pro Variante zusammenfassen
+            all_scores.setdefault(variant, []).extend(scores)
+
+        build_summary(all_scores, output_dir, cfg)
+    finally:
+        # Stop containers when done
+        if use_judge:
+            print("\nStopping ollama-judge...")
+            stop_containers(["ollama-judge"])
 
 
 if __name__ == "__main__":

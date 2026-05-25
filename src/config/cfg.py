@@ -47,6 +47,7 @@ class IngestionCfg:
 @dataclass
 class GraphCfg:
     max_hops: int
+    top_k: int = 10          # Override retrieval.top_k — triples are short, need more context
 
 
 @dataclass

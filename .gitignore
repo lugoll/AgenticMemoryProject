@@ -15,9 +15,9 @@ env/
 # uv
 .uv/
 
-# Data layer — never commit datasets or persisted indices
+# Data layer
+# Rohdaten und abgeleitete Daten nicht ins Git
 data/hotpotqa.json
-data/stores/
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
@@ -25,6 +25,15 @@ data/processed/*
 !data/raw/multihop_benchmark*
 !data/processed/.gitkeep
 !data/processed/baseline_dummy*
+
+# Stores: BM25 und Graph werden committet, damit kein Ingest nötig ist.
+# Vector (ChromaDB) läuft als Docker Volume und ist nicht committbar —
+# muss lokal per `uv run python scripts/02_setup.py --variant vector` aufgebaut werden.
+data/stores/*
+!data/stores/.gitkeep
+!data/stores/bm25.db
+!data/stores/graph.json
+!data/stores/graph.checkpoint
 
 # Evaluation outputs — generated artifacts, not source
 evaluations/*

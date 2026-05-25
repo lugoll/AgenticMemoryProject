@@ -301,9 +301,14 @@ notebooks/02_results_analysis.ipynb
 
 - [ ] **0.20** Modelle laden (einmalig — Ollama zieht aus eigenem Registry, kein HF Token nötig):
   ```bash
-  docker exec ollama-agent ollama pull llama3.1:8b   # ~5GB
-  docker exec ollama-judge ollama pull qwen2.5:7b    # ~5GB
+  docker exec ollama-agent ollama pull llama3.1:8b   # ~5GB  — Agent + Graph-Ingest
+  docker exec ollama-judge ollama pull qwen2.5:14b   # ~9GB  — Judge (Upgrade von 7B, 2026-05-25)
   ```
+  **Warum 14B für den Judge?** 16GB VRAM erlaubt keine zwei 14B-Modelle gleichzeitig (~18GB nötig).
+  Agent und Judge laufen aber sequenziell (03_run.py → 04_evaluate.py) und `OLLAMA_KEEP_ALIVE=0`
+  am Judge-Container stellt sicher, dass das Agent-Modell beim Start des Judges bereits entladen ist.
+  Nutzen: zuverlässigere Judge-Verdicts bei grenzwertigen Antworten — betrifft alle Varianten gleich,
+  verzerrt den Vergleich nicht. Llama (Agent) vs. Qwen (Judge) bleibt als Anti-Bias-Trennung erhalten.
 
 - [ ] **0.21** ChromaDB prüfen:
   ```bash
@@ -409,6 +414,189 @@ Format:
   ```
 - [ ] **1.3** Skript ausführen mit `--n 50` (Entwicklung), Output prüfen
 - [ ] **1.4** Sicherstellen: `meta.n_documents` und Paragraph-Format sehen sinnvoll aus
+
+---
+
+## Graph-Variante: Architektur-Entscheidungen
+
+> Dieser Abschnitt dokumentiert drei bewusste Design-Entscheidungen für die Graph-Variante,
+> die vom naiven Ausgangsentwurf abweichen. Jede Entscheidung ist für die Präsentation begründet.
+
+### Entscheidung 1 — MultiDiGraph statt DiGraph
+
+**Problem:** `nx.DiGraph` erlaubt nur eine Kante pro (source, target) Paar.
+Wenn zwei Dokumente dieselben Entitäten mit unterschiedlichen Prädikaten verbinden
+(z.B. `Scotland --is_a-- Country` und `Scotland --located_in-- UK`), überschreibt
+der zweite `add_edge`-Aufruf den ersten Predicate-Wert stillschweigend.
+
+**Lösung:** `nx.MultiDiGraph` — mehrere Kanten zwischen denselben Nodes möglich,
+jede mit eigenem Predicate.
+
+**Wissenschaftliche Begründung:** Datenverlust durch DiGraph würde den Graphen
+systematisch ärmer machen als die Quelldokumente es erlauben. MultiDiGraph
+entspricht dem Standard in der KG-Literatur (Bordes et al., 2013 — TransE).
+
+---
+
+### Entscheidung 2 — Predicate-Whitelist
+
+**Problem:** Ohne Einschränkung erfindet das LLM freie Predicate-Strings:
+`"is located on the large natural bay of"`, `"is also known by her nickname"`.
+Diese Fragmente erscheinen nur einmal im Graph, sodass kein anderes Dokument
+sie referenzieren kann — Cross-Document-Reasoning ist damit unmöglich.
+
+**Lösung:** System-Prompt enthält eine Whitelist von ~25 normierten Predicates
+(`born_in`, `located_in`, `starred_in`, ...), abgestimmt auf HotpotQA-Domänen
+(Biographien, Filme, Geographie, Sport).
+
+**Grenze der Lösung:** LLMs halten sich nicht perfekt an Whitelists.
+Abweichungen werden in der Analyse als Limitation benannt.
+
+**Wissenschaftliche Begründung:** Predicate-Normalisierung ist Standard in
+Knowledge-Graph-Completion-Arbeiten; Microsoft GraphRAG (Edge et al., 2024)
+nutzt einen ähnlichen Ansatz mit Community-Summaries über normierte Relationen.
+
+---
+
+### Entscheidung 3 — BM25 Entity Linking bei Retrieval
+
+**Problem:** Multi-Hop-QA erfordert, dass die `search()`-Funktion den richtigen
+Einstiegspunkt im Graph findet. Einfaches Substring-Matching auf Query-Tokens
+gegen Node-Namen liefert zu viele falsche Seeds (z.B. trifft Token `"new"` auf
+`"I Love New York"`, `"New York City"`, `"New York Jets"` etc.) und zu wenige
+richtige (Token `"vh1's"` findet Node `"VH1 Big in '06 Awards"` nicht).
+
+**Lösung:** BM25-Index über alle Node-Namen (`rank_bm25`, pure Python).
+Bei `search()` wird der Query per BM25 gegen alle Node-Namen gescort;
+die Top-10 Nodes nach Score werden als BFS-Einstiegspunkte verwendet.
+
+**Warum BM25 und nicht ein LLM-Call?**
+Ein LLM-basiertes Entity Linking würde bei jeder Anfrage einen Extra-LLM-Call
+erzeugen und damit Retrieval-Tokens produzieren. Das würde die wissenschaftliche
+Kernaussage — Graph bezahlt beim Ingest, spart beim Retrieval — zerstören.
+BM25 produziert keine Tokens und ist kein LLM: der Vergleich bleibt ehrlich.
+
+**Verhältnis zur BM25-Variante:**
+BM25 wird hier für Entity Linking (Kurztext-zu-Kurztext, Node-Name-Lookup)
+verwendet — nicht als Retrieval-Methode über Passagen. Die BM25-Variante
+rankt vollständige Textpassagen aus dem Korpus; das Graph-Entity-Linking rankt
+2-5-Wort-Node-Namen. Scope und Funktion sind grundverschieden.
+
+**Limitation (für Präsentation benennen):** BM25-basiertes Entity Linking
+könnte die Graph-Variante leicht gegenüber der reinen BM25-Baseline begünstigen,
+wenn der lexikalische Überlapp zwischen Query und Node-Namen entscheidend ist.
+In der Praxis ist dieser Effekt gering, da das Retrieval-Ergebnis vom BFS-Subgraph
+abhängt — nicht vom BM25-Score selbst.
+
+---
+
+## Graph-Variante: Ingest-Qualität & das Präzisions-Ressourcen-Dilemma
+
+> **Erkenntnisse aus dem empirischen Lauf vom 2026-05-25 (50-Fragen-Run, 990 Dokumente)**
+>
+> Dieses Kapitel dokumentiert die zentrale Spannung bei GraphRAG:
+> *Wie präzise baut man den Graphen — und wie viele Ressourcen ist man bereit, dafür aufzubringen?*
+
+---
+
+### Das Grundproblem: Ingest-Qualität bestimmt Retrieval-Qualität
+
+Bei Vector RAG und BM25 ist der Ingest mechanisch: Chunk aufteilen, embedden, indexieren.
+Die Qualität des Retrieval hängt vom Embedding-Modell ab, nicht von der Ingest-Phase.
+
+Bei GraphRAG ist das fundamental anders: **Jede Retrieval-Antwort ist nur so gut wie die
+Kanten, die beim Ingest extrahiert wurden.** Fehlt eine Kante im Graph, kann kein noch so
+gutes Retrieval sie liefern. Der Graph ist eine verlustbehaftete Kompression der Dokumente —
+und der Verlust entsteht beim Ingest, nicht beim Retrieval.
+
+Das erzeugt ein Dilemma, das in der Literatur oft unterschätzt wird:
+
+| Ingest-Aufwand | Graphqualität | Retrieval | Token-Kosten |
+|---|---|---|---|
+| Wenig (wenige Triples, kleine Token-Budgets) | Lückenhaft | Schnell, aber lückenhaft | Gering |
+| Viel (viele Triples, große Token-Budgets) | Vollständig | Gut, aber teuer in der Erstellung | Hoch |
+
+**Graph zahlt zweimal:** Einmal beim Ingest (LLM-Extraktion), einmal beim Retrieval (BFS).
+Nur wenn der Ingest vollständig genug ist, lohnt sich die Investition.
+
+---
+
+### Empirische Fehleranalyse (50 Fragen, alter Ingest mit max_tokens=512)
+
+Der 50-Fragen-Run wurde manuell kategorisiert:
+
+| Kategorie | Anzahl | Behebbar? |
+|---|---|---|
+| Richtig beantwortet (EM) | 6 (12%) | — |
+| Fast richtig (F1 ≥ 0.4) | 15 (30%) | Teilweise durch Judge |
+| Antwort im Graph, aber nicht im Context | **24 (48%)** | **Ja — Ingest-Problem** |
+| Antwort nicht im Graph | 5 (10%) | Nein — Datenlücke |
+
+Die 24 "in graph but not in context"-Fälle sind das Kernproblem.
+Sie entstehen durch **strukturelle BFS-Abschneidung**: Die Antwort-Entität existiert als Knoten,
+aber der BFS-Pfad von der Query-Entität zu ihr wird durch das `top_k`-Limit (10 Triples)
+abgeschnitten, bevor er sie erreicht.
+
+**Ursache:** HotpotQA-Artikel über Events (z.B. VH1 Hip Hop Honors) nennen 30+ Gäste.
+Mit `max_tokens=512` und Limit "at most 10" extrahiert das LLM die ersten ~10 Entitäten
+und stoppt. Spätere Entitäten im Artikel fehlen komplett als Kanten im Graph.
+Konkret: "Tiffany Pollard" wurde aus einem VH1-Artikel nicht extrahiert, obwohl sie
+dort als Gast genannt ist — die Kante `VH1 Awards --starred_in-- Tiffany Pollard`
+existiert im Graph einfach nicht.
+
+---
+
+### Entscheidung 4 — Ingest-Budget verdoppeln (2026-05-25)
+
+**Änderung:**
+- `max_tokens`: `512 → 1024` (in `unified_config.yaml`, `llm.ingest`)
+- Triple-Limit im System-Prompt: `"at most 10"` → `"at most 20"` (in `model_graph.py`)
+
+**Erwartete Auswirkung:**
+- Artikel mit vielen Entitäten werden vollständiger extrahiert
+- ~15 der 24 strukturellen Abschneidungs-Fälle sollten sich verbessern
+- Die 5 "not in graph"-Fälle werden sich **nicht** verbessern — das sind genuine Datenlücken
+
+**Kosten:**
+- Ingest-Zeit: ~55 Min → ~100-110 Min (ca. 2×)
+- Ingest-Tokens: ~530K → ~1,0M prompt tokens (ca. 2×)
+- Kein Einfluss auf Retrieval-Tokens (BFS erzeugt keine LLM-Calls)
+
+**Für die Präsentation:**
+Diese Entscheidung illustriert das zentrale Argument des Projekts besonders gut:
+GraphRAG hat keinen fixen Token-Verbrauch — er ist eine Designentscheidung.
+Mehr Ingest-Aufwand → bessere Graphqualität → bessere Antworten → aber höhere Kosten.
+Vector RAG und BM25 haben dieses Dilemma nicht: ihre Ingest-Qualität ist
+von der Ressource weitgehend unabhängig (jenseits des Embedding-Modells).
+
+**Limitation (für Präsentation benennen):**
+Auch mit 20 Triples kann das LLM nicht alle Entitäten aus einem Artikel mit 50+ Entitäten
+extrahieren. Das Triple-Limit ist eine pragmatische Approximation, keine vollständige Lösung.
+Vollständige Graphabdeckung würde entweder (a) unbegrenztes Token-Budget,
+(b) mehrere Ingest-Passes mit unterschiedlichen Fokus-Prompts, oder
+(c) regelbasierte Named-Entity-Extraction zusätzlich zum LLM erfordern.
+Diese Erweiterungen liegen außerhalb des Scope dieses Experiments.
+
+---
+
+### Zusammenfassung: Das Ingest-Investitions-Dilemma
+
+```
+GraphRAG-Qualität = f(Ingest-Präzision, Ingest-Vollständigkeit)
+                              ↑                    ↑
+                         Predicate-           Token-Budget
+                         Whitelist,           pro Dokument
+                         Prompt-Design
+```
+
+Die Whitelist (Entscheidung 2) adressiert die Präzision.
+Das Token-Budget (Entscheidung 4) adressiert die Vollständigkeit.
+Beide sind Designparameter — und beide kosten beim Ingest.
+
+**Kernthese für die Präsentation:**
+*"GraphRAG verschiebt den Token-Aufwand vom Retrieval in den Ingest.
+Wie viel man verschiebt, ist eine Entscheidung — keine technische Konstante.
+Dieser Benchmark misst einen Punkt auf dieser Trade-off-Kurve, nicht den einzig möglichen."*
 
 ---
 
@@ -909,15 +1097,17 @@ Phase 1 und Phase 2 (NetworkX-Refactor in model_graph.py) können parallel laufe
 
 | Parameter | Wert | Begründung |
 |---|---|---|
-| `--n` (Fragen) | 50 (Test) / 300 (Final) | 300 statistisch solide, mit vLLM realistisch |
-| Fragetypen | 50/50 bridge/comparison | Ausgeglichener Benchmark |
+| `--n` (Fragen) | 500 (Final) | 250 bridge + 250 comparison; ±3,5 PP Konfidenzintervall — ausreichend für Präsentation |
+| Fragetypen | 50/50 bridge/comparison | Ausgeglichener Benchmark; bridge spiegelt Unternehmens-Wiki-Use-Case wider |
+| Unique Dokumente (ca.) | ~3.500 | Skaliert mit N; realistisches Unternehmens-Wiki-Szenario |
 | `max_hops` (Graph) | 3 | HotpotQA hat bis zu 3-Hop-Ketten |
 | `top_k` (Retrieval) | 5 | Standard in RAG-Literatur |
+| `top_k` (Graph) | 10 | Triples sind kurz (~8 Wörter), brauchen mehr Kontext als Textpassagen |
 | `similarity_cutoff` (Vector) | 0.5 | 0.7 zu restriktiv für Multi-Hop |
 | LLM Agent | `llama3.1:8b` · Ollama Port 11434 | Ollama JSON Schema Structured Output |
 | LLM Ingest (Graph-Extraktion) | `llama3.1:8b` · Ollama Port 11434 | gleicher Container wie Agent, sequenziell |
-| LLM Judge | `qwen2.5:7b` · Ollama Port 11435 | andere Model-Family → kein Self-Enhancement-Bias |
-| Graph-Ingest parallel | `max_workers=4` bei N>100 | Laufzeit N=300: ~4h statt ~15h |
+| LLM Judge | `qwen2.5:14b` · Ollama Port 11435 | 14B statt 7B: bessere Urteilsqualität; andere Model-Family → kein Self-Enhancement-Bias |
+| Graph-Ingest Dauer (N=500) | ~6–7 Std | Einmalig, danach graph.json (~7 MB) committen |
 
 ---
 

@@ -13,7 +13,7 @@ services:
     environment:
       - IS_PERSISTENT=TRUE
       - ANONYMIZED_TELEMETRY=FALSE
-    restart: unless-stopped
+    restart: no
 
   # ── LLM Agent + Ingest ───────────────────────────────────────────────────────
   # Llama-3.1-8B für QA-Agent und Graph-Triple-Extraktion (sequential, nie gleichzeitig).
@@ -36,12 +36,15 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
+    restart: no
 
   # ── LLM Judge ────────────────────────────────────────────────────────────────
-  # Qwen2.5-7B für LLM-as-Judge Evaluation.
-  # Andere Model-Family als Agent → kein Self-Enhancement-Bias.
-  # Läuft nur während Phase 4 (Evaluation) — nicht gleichzeitig mit ollama-agent aktiv.
+  # Qwen2.5-14B für LLM-as-Judge Evaluation (Upgrade von 7B, 2026-05-25).
+  # Andere Model-Family als Agent (Qwen vs. Llama) → kein Self-Enhancement-Bias.
+  # Läuft nur in 04_evaluate.py — nie gleichzeitig mit ollama-agent.
+  # OLLAMA_KEEP_ALIVE=0: Modell wird sofort nach letztem Call entladen.
+  # Grund: 16GB VRAM — zwei 14B-Modelle gleichzeitig würden ~18GB brauchen (zu viel).
+  # Mit KEEP_ALIVE=0 ist das Agent-Modell bereits entladen wenn der Judge startet.
   ollama-judge:
     image: ollama/ollama:latest
     container_name: ollama-judge
@@ -50,7 +53,7 @@ services:
     volumes:
       - ollama_judge_models:/root/.ollama
     environment:
-      - OLLAMA_KEEP_ALIVE=10m
+      - OLLAMA_KEEP_ALIVE=0
     deploy:
       resources:
         reservations:
@@ -58,7 +61,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
+    restart: no
 
 volumes:
   chroma_data:
