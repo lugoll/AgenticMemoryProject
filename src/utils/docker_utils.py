@@ -1,8 +1,18 @@
-"""Docker container lifecycle management for pipeline scripts."""
+"""Docker container lifecycle management for pipeline scripts.
 
+Set USE_NATIVE_OLLAMA=true to skip starting/stopping the ollama-agent and
+ollama-judge containers (e.g. when running natively on Mac via native Ollama).
+ChromaDB is still managed via Docker unless you run it separately too.
+"""
+
+import os
 import subprocess
 import time
 from pathlib import Path
+
+
+def _native_ollama() -> bool:
+    return os.environ.get("USE_NATIVE_OLLAMA", "").lower() in ("1", "true", "yes")
 
 
 def _docker_cmd(cmd: str) -> str:
@@ -13,6 +23,8 @@ def _docker_cmd(cmd: str) -> str:
 
 def ensure_containers_running(containers: list[str]) -> None:
     """Start specified containers if not already running."""
+    if _native_ollama():
+        containers = [c for c in containers if not c.startswith("ollama")]
     for container in containers:
         status = _docker_cmd(f"docker ps --filter name={container} --format '{{{{.State}}}}'")
         if status != "running":
@@ -24,6 +36,8 @@ def ensure_containers_running(containers: list[str]) -> None:
 
 def stop_containers(containers: list[str]) -> None:
     """Stop specified containers."""
+    if _native_ollama():
+        containers = [c for c in containers if not c.startswith("ollama")]
     for container in containers:
         status = _docker_cmd(f"docker ps --filter name={container} --format '{{{{.State}}}}'")
         if status == "running":

@@ -17,17 +17,12 @@ import random
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def load_and_sample(n: int, seed: int) -> tuple[list[dict], list[str], list[dict]]:
-    import os
-    from pathlib import Path
-
-    # Load HF_TOKEN from .env if present (avoids rate-limit warnings)
-    env_file = Path(__file__).parent.parent / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            if line.startswith("HF_TOKEN="):
-                os.environ.setdefault("HF_TOKEN", line.split("=", 1)[1].strip())
 
     # dill 0.3.8 + Python 3.14: _batch_setitems() signature changed → patch the legacy
     # cache check that triggers it (pure migration helper, safe to skip on fresh installs).

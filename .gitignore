@@ -19,12 +19,10 @@ env/
 # Rohdaten und abgeleitete Daten nicht ins Git
 data/hotpotqa.json
 data/raw/*
-data/processed/*
 !data/raw/.gitkeep
 !data/raw/baseline_dummy*
 !data/raw/multihop_benchmark*
 !data/processed/.gitkeep
-!data/processed/baseline_dummy*
 
 # Stores: BM25 und Graph werden committet, damit kein Ingest nötig ist.
 # Vector (ChromaDB) läuft als Docker Volume und ist nicht committbar —
