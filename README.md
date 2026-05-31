@@ -11,6 +11,16 @@ und wie verhält sich das im Verhältnis zum Token-Verbrauch?
 | `bm25` | BM25 Keyword-Suche | keiner (Store im Repo) |
 | `vector` | Semantic Embeddings via ChromaDB | ~72s lokal (kein LLM) |
 | `graph` | Knowledge Graph + BFS via NetworkX | ~100 Min (LLM, Store im Repo) |
+| `msgraphrag` | Microsoft GraphRAG (Community-Hierarchie, lokale Suche) | ~mehrere Stunden (LLM, Index lokal) |
+
+> **`msgraphrag`-Hinweise:** Diese Variante ruft das `graphrag`-CLI per
+> Subprocess auf und schickt alle LLM-Calls durch einen in-Process
+> LiteLLM-Proxy, damit Token-Verbrauch identisch erfasst wird. Embeddings
+> laufen über denselben lokalen `BAAI/bge-base-en-v1.5`-Encoder wie die
+> `vector`-Variante. Da GraphRAG seinen Index nur einmalig baut, wirft
+> `UpdateMemory` für diese Variante `NotImplementedError`. Außerdem läuft
+> GraphRAG end-to-end: `search()` liefert direkt die finale Antwort und
+> `03_run.py` überspringt den zusätzlichen Agent-LLM-Call.
 
 ---
 
@@ -82,12 +92,13 @@ uv run python scripts/02_setup.py --variant vector --data data/hotpotqa.json
 ### Schritt 7 — Alle drei Varianten laufen lassen
 
 ```bash
-uv run python scripts/03_run.py --variant bm25   --n 500
-uv run python scripts/03_run.py --variant vector --n 500
-uv run python scripts/03_run.py --variant graph  --n 500
+uv run python scripts/03_run.py --variant bm25       --n 500
+uv run python scripts/03_run.py --variant vector     --n 500
+uv run python scripts/03_run.py --variant graph      --n 500
+uv run python scripts/03_run.py --variant msgraphrag --n 500
 ```
 
-> Dauer pro Variante: BM25 ~5 Min | Vector ~12 Min | Graph ~15 Min  
+> Dauer pro Variante: BM25 ~5 Min | Vector ~12 Min | Graph ~15 Min | MS GraphRAG variabel  
 > Ausgabe je: `evaluations/<variante>_<timestamp>_results.jsonl`
 
 ### Schritt 8 — Ergebnisse auswerten

@@ -81,9 +81,24 @@ class TelemetryTracker(CustomLogger):
         LiteLLM 1.82+ stores caller-supplied metadata inside litellm_params
         rather than at the top level of the callback kwargs dict.
         Fall back to the top-level key for direct/unit-test invocations.
+
+        Proxy-routed calls (e.g. MS GraphRAG's CLI hitting the in-process
+        LiteLLM proxy) cannot forward our phase/actor tags, so we look up a
+        process-global PROXY_CONTEXT when metadata is missing phase. Lazy
+        import keeps this module loadable when src.utils isn't on path.
         """
         litellm_params: dict[str, Any] = kwargs.get("litellm_params") or {}
-        return litellm_params.get("metadata") or kwargs.get("metadata") or {}
+        md = litellm_params.get("metadata") or kwargs.get("metadata") or {}
+        if md.get("phase"):
+            return md
+        try:
+            from src.utils.litellm_proxy import PROXY_CONTEXT
+        except Exception:  # noqa: BLE001 — fall through to UNTAGGED if util unavailable
+            return md
+        ctx = PROXY_CONTEXT.get("current")
+        if ctx:
+            return {**ctx, **md}
+        return md
 
     def _record_success(
         self,

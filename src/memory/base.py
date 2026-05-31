@@ -19,6 +19,13 @@ class BaseMemory(ABC):
           telemetry tracker before returning.
     """
 
+    # End-to-end variants (e.g. MS GraphRAG) synthesise the final answer inside
+    # search() and so do not benefit from an additional agent-reasoning LLM call.
+    # When True, the runner uses search()[0] as the final answer and skips its
+    # own answer_question() step. All token usage is still captured via the
+    # telemetry tracker on the proxy-routed LLM calls.
+    is_end_to_end: bool = False
+
     @abstractmethod
     def ingest_documents(self, documents: list[str]) -> None:
         """

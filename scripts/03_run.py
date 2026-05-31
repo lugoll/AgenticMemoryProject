@@ -91,7 +91,33 @@ def build_memory(variant: str, cfg):
     elif variant == "graph":
         from src.memory.model_graph import GraphMemory
         return GraphMemory(config=cfg)
+    elif variant == "msgraphrag":
+        from src.memory.model_msgraphrag import MSGraphRAGMemory
+        return MSGraphRAGMemory(config=cfg)
     raise ValueError(f"Unbekannte Variante: {variant}")
+
+
+def _sum_tokens_for_run(telemetry_path: Path, run_id: str) -> tuple[int, int]:
+    """Sum prompt/completion tokens across all llm_call records for run_id.
+
+    Used by end-to-end memories (e.g. msgraphrag) where multiple proxy-routed
+    calls happen inside one search(); we have no per-call response object to
+    pull usage from, so we re-read the JSONL the TelemetryTracker just wrote.
+    """
+    if not telemetry_path.exists():
+        return 0, 0
+    prompt = completion = 0
+    for line in telemetry_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("event") == "llm_call" and rec.get("run_id") == run_id:
+            prompt += rec.get("prompt_tokens", 0) or 0
+            completion += rec.get("completion_tokens", 0) or 0
+    return prompt, completion
 
 
 def check_store_ready(variant: str, memory, cfg) -> None:
@@ -143,10 +169,21 @@ def check_store_ready(variant: str, memory, cfg) -> None:
             )
         print(f"  Vector-Store: {count} Dokumente in ChromaDB ✓")
 
+    elif variant == "msgraphrag":
+        settings_path = Path(cfg.stores.msgraphrag.root_dir) / "settings.yaml"
+        output_dir = Path(cfg.stores.msgraphrag.root_dir) / "output"
+        if not settings_path.exists() or not output_dir.exists() or not any(output_dir.iterdir()):
+            raise SystemExit(
+                f"\n[FEHLER] MS GraphRAG store nicht gefunden oder leer: {cfg.stores.msgraphrag.root_dir}\n"
+                f"         Bitte zuerst ausführen:\n"
+                f"         uv run python scripts/02_setup.py --variant msgraphrag --data data/hotpotqa.json\n"
+            )
+        print(f"  MS GraphRAG store: {output_dir} ✓")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAG-Experiment ausführen")
-    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph"])
+    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph", "msgraphrag"])
     parser.add_argument("--n",    type=int,  default=100, help="Anzahl Fragen (default: 100)")
     parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
     args = parser.parse_args()
@@ -181,14 +218,35 @@ def main() -> None:
                 run_id = uuid.uuid4().hex[:8]
                 t_total = time.perf_counter()
 
-                context = memory.search(q["question"])
-                result = answer_question(
-                    question=q["question"],
-                    context=context,
-                    cfg_agent=cfg.llm.agent,
-                    variant=args.variant,
-                    run_id=run_id,
-                )
+                if memory.is_end_to_end:
+                    # End-to-end variants (e.g. msgraphrag) synthesise the
+                    # answer inside search(). Stamp run_id into the contextvar
+                    # so proxy-routed telemetry rows pick it up, then read
+                    # tokens back from the JSONL since there's no single
+                    # response object to inspect.
+                    from src.memory.model_msgraphrag import CURRENT_RUN_ID
+                    token = CURRENT_RUN_ID.set(run_id)
+                    try:
+                        context = memory.search(q["question"])
+                    finally:
+                        CURRENT_RUN_ID.reset(token)
+                    answer = context[0] if context else ""
+                    tp, tc = _sum_tokens_for_run(tracker.telemetry_path, run_id)
+                    result = AnswerResult(
+                        answer=answer,
+                        tokens_prompt=tp,
+                        tokens_completion=tc,
+                        llm_latency_ms=0.0,
+                    )
+                else:
+                    context = memory.search(q["question"])
+                    result = answer_question(
+                        question=q["question"],
+                        context=context,
+                        cfg_agent=cfg.llm.agent,
+                        variant=args.variant,
+                        run_id=run_id,
+                    )
 
                 total_latency_ms = round((time.perf_counter() - t_total) * 1000, 2)
 

@@ -54,5 +54,8 @@ def get_required_containers(variant: str) -> list[str]:
     elif variant == "graph":
         # Graph uses both chromadb for entity embedding and ollama for extraction
         containers.extend(["chromadb", "ollama-agent"])
+    elif variant == "msgraphrag":
+        # MS GraphRAG uses LanceDB locally (no chromadb) but needs the chat LLM.
+        containers.append("ollama-agent")
     # bm25 doesn't need any containers
     return containers

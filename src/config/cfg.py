@@ -10,7 +10,7 @@ Env var overrides (useful for native Ollama on Mac, no Docker):
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -61,10 +61,25 @@ class GraphCfg:
 
 
 @dataclass
+class MSGraphRAGCfg:
+    # Defaults mirror the YAML so test helpers can construct a Config
+    # without spelling out the msgraphrag block.
+    root_dir: str = "data/stores/msgraphrag"
+    proxy_port: int = 4555
+    query_method: str = "local"                # "local" | "global" | "drift" | "basic"
+    chat_model: str = "ollama/llama3.1:8b"     # must match proxy_config.yaml
+    embed_model: str = "local-bge"             # must match proxy_config.yaml
+    concurrent_requests: int = 1               # 1 for Ollama, higher for cloud
+    response_type: str = "Single Sentence"     # graphrag --response-type
+    community_level: int = 2                   # graphrag --community-level
+
+
+@dataclass
 class StoresCfg:
     bm25: str
     graph: str
     vector: str
+    msgraphrag: MSGraphRAGCfg = field(default_factory=MSGraphRAGCfg)
 
 
 @dataclass
@@ -104,6 +119,11 @@ def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
         retrieval=RetrievalCfg(**raw["retrieval"]),
         ingestion=IngestionCfg(**raw["ingestion"]),
         graph=GraphCfg(**raw["graph"]),
-        stores=StoresCfg(**raw["stores"]),
+        stores=StoresCfg(
+            bm25=raw["stores"]["bm25"],
+            graph=raw["stores"]["graph"],
+            vector=raw["stores"]["vector"],
+            msgraphrag=MSGraphRAGCfg(**raw["stores"]["msgraphrag"]),
+        ),
         telemetry=TelemetryCfg(**raw["telemetry"]),
     )

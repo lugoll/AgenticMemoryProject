@@ -1,0 +1,52 @@
+# LiteLLM proxy config used by the msgraphrag variant.
+#
+# Started as a daemon thread inside the same Python process by
+# src/utils/litellm_proxy.py — see that file for the lifecycle.
+#
+# Two models are exposed:
+#   - ollama/llama3.1:8b → forwarded to the local Ollama daemon.
+#   - local-bge          → served in-process by LocalBGEEmbedding
+#                          (sentence-transformers BAAI/bge-base-en-v1.5).
+#
+# Token usage and latency for every call land in the same JSONL the other
+# variants use: the TelemetryTracker registered globally via
+# register_tracker() (in 02_setup.py / 03_run.py) picks them up via
+# litellm.callbacks. The tracker reads PROXY_CONTEXT
+# (src/utils/litellm_proxy.py) to fill in phase/actor when GraphRAG calls
+# arrive without metadata.
+
+model_list:
+  - model_name: ollama/llama3.1:8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://localhost:11434
+
+  - model_name: local-bge
+    litellm_params:
+      # The "<provider>/<anything>" model string tells LiteLLM to dispatch
+      # to the custom provider registered as "local-bge" via custom_provider_map
+      # below. The proxy imports the handler at startup from the dotted path.
+      model: local-bge/bge-base-en-v1.5
+
+litellm_settings:
+  # Disable response caching so every retrieval call is actually counted.
+  cache: false
+  # Drop unsupported OpenAI params before forwarding to Ollama / our handler
+  # (e.g. GraphRAG sometimes sends presence_penalty which Ollama ignores).
+  drop_params: true
+  # Register the sentence-transformer embedding provider. The proxy imports
+  # the handler at startup and overwrites litellm.custom_provider_map, so
+  # registering it from Python before run_server is not sufficient — it
+  # must be declared here.
+  custom_provider_map:
+    # The proxy's get_instance_fn resolves this path by file location
+    # relative to proxy_config.yaml — so it loads proxy_handlers.py from
+    # this same directory, which re-exports the real handler.
+    - provider: local-bge
+      custom_handler: proxy_handlers.local_bge_handler
+
+general_settings:
+  # The proxy requires an api_key on incoming requests. GraphRAG sends
+  # whatever GRAPHRAG_API_KEY is set to; we set it to this same string in
+  # MSGraphRAGMemory before spawning the subprocess.
+  master_key: sk-graphrag-local

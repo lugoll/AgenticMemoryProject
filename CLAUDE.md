@@ -55,7 +55,6 @@ When navigating or generating new code, adhere to this directory-level separatio
 - **`src/config/` (Configuration Management):** The single source of truth for the framework. Houses the unified YAML settings and Pydantic loaders to ensure that parameters (like LLM temperature or chunk sizes) remain identical across all comparative runs.
 - **`src/telemetry/` (Observability Layer):** Contains the LiteLLM callbacks and tracking decorators. This code intercepts all LLM traffic to enforce the tagging rules defined in Section 4.
 - **`src/memory/` (Core Abstraction Layer):** Houses the foundational memory interfaces. The base class lives here, alongside the concrete implementations for Vector RAG (Model A) and GraphRAG (Model B). The agent must only ever interact with the base interface.
-- **`src/agent/` (Orchestration Layer):** Contains the LangGraph state definitions, routing logic, and the highly restricted toolset (`SearchMemory`, `UpdateMemory`).
 - **`src/pipelines/` (Execution Layer):** The top-level scripts that string the other components together. Separated into three distinct runtimes: Data Ingestion (`01`), Agentic QA (`02`), and Evaluation (`03`).
 
 ## 6. Development Rules for Coding Agent

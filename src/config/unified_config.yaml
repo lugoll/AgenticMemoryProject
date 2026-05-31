@@ -53,6 +53,24 @@ stores:
   bm25: "data/stores/bm25.db"
   graph: "data/stores/graph.json"
   vector: "vector_hotpotqa"  # ChromaDB collection name
+  msgraphrag:
+    # MS GraphRAG owns its own root dir: input/, output/, prompts/, settings.yaml live here.
+    root_dir: "data/stores/msgraphrag"
+    # LiteLLM proxy port; 4555 chosen to avoid clash with the default LiteLLM 4000.
+    proxy_port: 4555
+    # Local: entity-centric multi-hop (matches HotpotQA structure). Switch to
+    # global/drift for an ablation without re-ingesting.
+    query_method: "local"
+    # Model names — must match the model_list entries in proxy_config.yaml.
+    chat_model: "ollama/llama3.1:8b"
+    embed_model: "local-bge"
+    # 1 because Ollama serves one request at a time per model. Cloud endpoints
+    # can crank this up safely.
+    concurrent_requests: 1
+    # HotpotQA wants concise answers; default "Multiple Paragraphs" is too verbose.
+    response_type: "Single Sentence"
+    # Leiden hierarchy level; 2 is the graphrag default.
+    community_level: 2
 
 telemetry:
   output_dir: "evaluations/"
