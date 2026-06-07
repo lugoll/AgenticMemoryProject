@@ -46,16 +46,20 @@ def stop_containers(containers: list[str]) -> None:
     print()
 
 
-def get_required_containers(variant: str) -> list[str]:
-    """Get list of containers needed for this variant."""
+def get_required_containers(variant: str, include_agent_llm: bool = False) -> list[str]:
+    """Get list of containers needed for this variant.
+
+    include_agent_llm: set True in the run script, which always calls the agent
+    LLM regardless of variant (bm25 ingestion needs no LLM, but inference does).
+    """
     containers = []
     if variant == "vector":
         containers.append("chromadb")
     elif variant == "graph":
-        # Graph uses both chromadb for entity embedding and ollama for extraction
         containers.extend(["chromadb", "ollama-agent"])
     elif variant == "msgraphrag":
-        # MS GraphRAG uses LanceDB locally (no chromadb) but needs the chat LLM.
         containers.append("ollama-agent")
-    # bm25 doesn't need any containers
+    # bm25 doesn't need any containers for ingestion
+    if include_agent_llm and "ollama-agent" not in containers:
+        containers.append("ollama-agent")
     return containers

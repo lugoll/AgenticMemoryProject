@@ -192,8 +192,9 @@ def main() -> None:
     output_dir = Path(cfg.telemetry.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Start required containers
-    containers = get_required_containers(args.variant)
+    # Start required containers — always include ollama-agent since answer_question
+    # calls the agent LLM for every non-end-to-end variant (including bm25).
+    containers = get_required_containers(args.variant, include_agent_llm=True)
     if containers:
         print(f"Starting containers for {args.variant}...")
         ensure_containers_running(containers)
