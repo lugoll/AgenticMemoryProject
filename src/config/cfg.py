@@ -61,10 +61,19 @@ class GraphCfg:
 
 
 @dataclass
+class Neo4jCfg:
+    uri: str
+    username: str
+    password: str
+    database: str = "neo4j"
+
+
+@dataclass
 class StoresCfg:
     bm25: str
     graph: str
     vector: str
+    neo4j: Neo4jCfg = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -93,6 +102,10 @@ def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
         raw["llm"]["judge"]["base_url"] = url
     if host := os.environ.get("CHROMA_HOST"):
         raw["embedding"]["chroma_host"] = host
+    if uri := os.environ.get("NEO4J_URI"):
+        raw["stores"]["neo4j"]["uri"] = uri
+    if pw := os.environ.get("NEO4J_PASSWORD"):
+        raw["stores"]["neo4j"]["password"] = pw
 
     return Config(
         llm=LLMsCfg(
@@ -104,6 +117,11 @@ def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
         retrieval=RetrievalCfg(**raw["retrieval"]),
         ingestion=IngestionCfg(**raw["ingestion"]),
         graph=GraphCfg(**raw["graph"]),
-        stores=StoresCfg(**raw["stores"]),
+        stores=StoresCfg(
+            bm25=raw["stores"]["bm25"],
+            graph=raw["stores"]["graph"],
+            vector=raw["stores"]["vector"],
+            neo4j=Neo4jCfg(**raw["stores"]["neo4j"]) if "neo4j" in raw["stores"] else None,
+        ),
         telemetry=TelemetryCfg(**raw["telemetry"]),
     )

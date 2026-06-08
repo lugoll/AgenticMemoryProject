@@ -53,6 +53,11 @@ stores:
   bm25: "data/stores/bm25.db"
   graph: "data/stores/graph.json"
   vector: "vector_hotpotqa"  # ChromaDB collection name
+  neo4j:
+    uri: "bolt://localhost:7687"
+    username: "neo4j"
+    password: "password"
+    database: "neo4j"
 
 telemetry:
   output_dir: "evaluations/"

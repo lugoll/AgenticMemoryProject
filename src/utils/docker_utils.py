@@ -52,7 +52,8 @@ def get_required_containers(variant: str) -> list[str]:
     if variant == "vector":
         containers.append("chromadb")
     elif variant == "graph":
-        # Graph uses both chromadb for entity embedding and ollama for extraction
         containers.extend(["chromadb", "ollama-agent"])
+    elif variant == "llamagraph":
+        containers.extend(["neo4j", "ollama-agent"])
     # bm25 doesn't need any containers
     return containers

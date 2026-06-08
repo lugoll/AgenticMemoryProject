@@ -14,6 +14,11 @@ dependencies = [
     "sentence-transformers>=3.0",
     "rank-bm25>=0.2.2",
     "python-dotenv>=1.2.2",
+    "llama-index-core>=0.12,<1",
+    "llama-index-graph-stores-neo4j>=0.4,<1",
+    "llama-index-llms-litellm>=0.3,<1",
+    "llama-index-embeddings-huggingface>=0.4,<1",
+    "neo4j>=5.19,<6",
 ]
 
 [build-system]

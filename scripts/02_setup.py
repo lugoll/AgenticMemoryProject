@@ -37,7 +37,7 @@ def _read_telemetry(path: Path) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAG-Store aufbauen")
-    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph"])
+    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph", "llamagraph"])
     parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
     parser.add_argument("--n", type=int, default=None,
                         help="Maximale Anzahl Dokumente (default: alle). "
@@ -80,6 +80,9 @@ def main() -> None:
         elif args.variant == "graph":
             from src.memory.model_graph import GraphMemory
             memory = GraphMemory(config=cfg)
+        elif args.variant == "llamagraph":
+            from src.memory.model_llamagraph import LlamaIndexGraphMemory
+            memory = LlamaIndexGraphMemory(config=cfg)
         else:
             raise ValueError(f"Unbekannte Variante: {args.variant}")
 

@@ -91,6 +91,9 @@ def build_memory(variant: str, cfg):
     elif variant == "graph":
         from src.memory.model_graph import GraphMemory
         return GraphMemory(config=cfg)
+    elif variant == "llamagraph":
+        from src.memory.model_llamagraph import LlamaIndexGraphMemory
+        return LlamaIndexGraphMemory(config=cfg)
     raise ValueError(f"Unbekannte Variante: {variant}")
 
 
@@ -125,6 +128,24 @@ def check_store_ready(variant: str, memory, cfg) -> None:
             )
         print(f"  Graph-Store: {memory.node_count} Nodes, {memory.edge_count} Kanten ✓")
 
+    elif variant == "llamagraph":
+        try:
+            count = memory.node_count
+        except Exception as e:
+            raise SystemExit(
+                f"\n[FEHLER] Neo4j nicht erreichbar: {e}\n"
+                f"         Ist Neo4j gestartet?  docker compose up -d neo4j\n"
+                f"         Falls ja, Ingest ausführen:\n"
+                f"         uv run python scripts/02_setup.py --variant llamagraph --data data/hotpotqa.json\n"
+            )
+        if count == 0:
+            raise SystemExit(
+                f"\n[FEHLER] LlamaGraph-Store ist leer (0 Nodes in Neo4j)\n"
+                f"         Bitte zuerst ausführen:\n"
+                f"         uv run python scripts/02_setup.py --variant llamagraph --data data/hotpotqa.json\n"
+            )
+        print(f"  LlamaGraph-Store: {count} Nodes in Neo4j ✓")
+
     elif variant == "vector":
         try:
             count = memory._collection.count()
@@ -146,7 +167,7 @@ def check_store_ready(variant: str, memory, cfg) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAG-Experiment ausführen")
-    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph"])
+    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph", "llamagraph"])
     parser.add_argument("--n",    type=int,  default=100, help="Anzahl Fragen (default: 100)")
     parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
     args = parser.parse_args()
