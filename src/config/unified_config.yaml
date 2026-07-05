@@ -48,6 +48,11 @@ graph:
   max_hops: 3                # HotpotQA braucht bis zu 3 Hops
   top_k: 10                  # Graph-Triples sind kurz (~8 Wörter) vs. Textpassagen (~50 Wörter)
                              # bei top_k=5 fehlt Hop 2 fast immer im Context
+  # Cross-Encoder-Reranker für beide Graph-Varianten (graph + llamagraph).
+  # Läuft auf CPU, kein LLM-Call → bewahrt die Zero-Cost-Retrieval-Eigenschaft.
+  # Ersetzt die reine BFS-/Similarity-Reihenfolge durch Query-Relevanz vor der Truncation.
+  rerank_model: "BAAI/bge-reranker-base"
+  rerank_top_n: 10           # finale Context-Größe nach dem Reranking (Default = top_k)
 
 stores:
   bm25: "data/stores/bm25.db"

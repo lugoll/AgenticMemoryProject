@@ -58,6 +58,10 @@ class IngestionCfg:
 class GraphCfg:
     max_hops: int
     top_k: int = 10          # Override retrieval.top_k — triples are short, need more context
+    # Cross-encoder reranker shared by both graph variants (graph + llamagraph).
+    # Runs on CPU, no LLM call → preserves the zero-cost-retrieval property.
+    rerank_model: str = "BAAI/bge-reranker-base"
+    rerank_top_n: int = 10   # Final context size after reranking (default = top_k)
 
 
 @dataclass

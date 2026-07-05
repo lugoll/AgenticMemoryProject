@@ -6,8 +6,40 @@ import time
 
 from src.config.cfg import Config
 from .base import BaseMemory
+from .model_graph import _SYSTEM_PROMPT, parse_triples
 
 logger = logging.getLogger(__name__)
+
+
+def _make_extract_prompt():
+    """PromptTemplate that reuses GraphMemory's system prompt verbatim.
+
+    Both graph variants then extract with the same predicate whitelist, casing
+    rules, list-splitting instruction, and worked examples. SimpleLLMPathExtractor
+    calls ``llm.apredict(prompt, text=..., max_knowledge_triplets=...)`` on a
+    completion-style template, so we append the ``{text}`` slot it fills per chunk.
+    LlamaIndex's SafeFormatter substitutes only known keys, leaving the literal
+    JSON braces in the prompt (e.g. ``{"triples": []}``) untouched — no escaping
+    needed. ``{max_knowledge_triplets}`` is passed by the extractor but ignored
+    here because the prompt already hard-caps the count, matching GraphMemory.
+    """
+    from llama_index.core.prompts import PromptTemplate
+
+    return PromptTemplate(_SYSTEM_PROMPT + "\n\nText:\n{text}\n\nJSON object:")
+
+
+def _parse_triplets_fn(response: str) -> list[tuple[str, str, str]]:
+    """Adapt GraphMemory's shared parser to the tuple shape the extractor expects.
+
+    Replaces LlamaIndex's ``default_parse_triplets_fn``, which drops any object
+    containing a comma and lowercases entity names via ``.capitalize()``. Delegating
+    to ``parse_triples`` gives JSON parsing with regex fallback, list-object
+    splitting, and predicate normalisation — identical to the GraphMemory variant.
+    """
+    return [
+        (t["subject"].strip(), t["predicate"].strip(), t["object"].strip())
+        for t in parse_triples(response)
+    ]
 
 
 def _make_flushing_extractor(**kwargs):
@@ -85,10 +117,12 @@ class LlamaIndexGraphMemory(BaseMemory):
     LlamaIndex PropertyGraphIndex backed by Neo4j.
 
     Ingest (Phase A):
-        Documents are passed to PropertyGraphIndex.from_documents() with a
-        SimpleLLMPathExtractor. The LLM (routed via the llama_index.llms.litellm
-        adapter) extracts free-form (subject, predicate, object) triples which
-        LlamaIndex stores as nodes and relationships in Neo4j.
+        Documents are inserted one at a time into a PropertyGraphIndex bound to
+        the Neo4j store, each processed by a SimpleLLMPathExtractor. The LLM
+        (routed via the llama_index.llms.litellm adapter) extracts free-form
+        (subject, predicate, object) triples which LlamaIndex stores as nodes and
+        relationships in Neo4j. Inserting per document (rather than one batched
+        from_documents call) lets ingest print incremental node/edge progress.
 
     Retrieval (Phase B):
         VectorContextRetriever embeds the query with sentence-transformers and
@@ -106,6 +140,7 @@ class LlamaIndexGraphMemory(BaseMemory):
         from llama_index.core import Settings
         from llama_index.graph_stores.neo4j import Neo4jPropertyGraphStore
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        from llama_index.core.postprocessor import SentenceTransformerRerank
 
         self._llm_cfg = config.llm.ingest
         self._max_hops: int = config.graph.max_hops
@@ -128,6 +163,14 @@ class LlamaIndexGraphMemory(BaseMemory):
 
         self._embed_model = HuggingFaceEmbedding(
             model_name=config.embedding.model,
+            device="cpu",
+        )
+
+        # Cross-encoder reranker applied to the query-anchored subgraph before
+        # truncation. No LLM call — keeps retrieval cost comparable to GraphMemory.
+        self._reranker = SentenceTransformerRerank(
+            model=config.graph.rerank_model,
+            top_n=config.graph.rerank_top_n,
             device="cpu",
         )
 
@@ -216,23 +259,39 @@ class LlamaIndexGraphMemory(BaseMemory):
             logger.warning("LlamaIndexGraphMemory: no documents to ingest")
             return
 
-        li_docs = [Document(text=d) for d in non_empty]
         extractor = _make_flushing_extractor(
             llm=self._llm_ingest,
-            max_paths_per_chunk=100,
+            extract_prompt=_make_extract_prompt(),
+            parse_fn=_parse_triplets_fn,
+            # Prompt hard-caps at 20 triples/chunk (matches GraphMemory's _SYSTEM_PROMPT).
+            max_paths_per_chunk=20,
             num_workers=1,
         )
-        self._index = PropertyGraphIndex.from_documents(
-            li_docs,
+        # Bind an index to the (empty) store, then insert documents one at a time.
+        # Unlike from_documents(show_progress=True) — which hands the whole batch to
+        # LlamaIndex and only emits an opaque single-step tqdm bar ("Applying
+        # transformations: 1/1") — the per-document loop lets us print incremental
+        # node/edge counts identical to the GraphMemory variant.
+        self._index = PropertyGraphIndex.from_existing(
+            property_graph_store=self._graph_store,
             kg_extractors=[extractor],
             embed_model=self._embed_model,
-            property_graph_store=self._graph_store,
-            show_progress=True,
+            llm=self._llm_ingest,
         )
+
+        total = len(non_empty)
+        for i, text in enumerate(non_empty, 1):
+            self._index.insert(Document(text=text))
+            if i % 10 == 0 or i == total:
+                print(
+                    f"  [{i:4d}/{total}]  nodes={self.node_count}  "
+                    f"edges={self.edge_count}",
+                    flush=True,
+                )
 
         logger.info(
             "LlamaIndexGraphMemory: ingested %d documents → %d nodes",
-            len(non_empty),
+            total,
             self.node_count,
         )
 
@@ -247,8 +306,14 @@ class LlamaIndexGraphMemory(BaseMemory):
             embed_model=self._embed_model,
             include_text=False,
             similarity_top_k=self._top_k,
+            # Traverse to the same radius as GraphMemory's BFS (config.graph.max_hops)
+            # so the two graph variants pull comparable multi-hop neighborhoods.
+            path_depth=self._max_hops,
         )
         nodes = retriever.retrieve(query)
+        # Rerank the query-anchored subgraph by cross-encoder relevance and keep
+        # the top_n (replaces raw similarity/traversal order before truncation).
+        nodes = self._reranker.postprocess_nodes(nodes, query_str=query)
         results = [n.get_content() for n in nodes if n.get_content().strip()]
         logger.debug(
             "LlamaIndexGraphMemory: query=%r → %d results", query, len(results)
@@ -265,6 +330,8 @@ class LlamaIndexGraphMemory(BaseMemory):
         # telemetry for this single-fact update is tagged correctly.
         extractor = _make_flushing_extractor(
             llm=self._llm_agent,
+            extract_prompt=_make_extract_prompt(),
+            parse_fn=_parse_triplets_fn,
             max_paths_per_chunk=20,
             num_workers=1,
         )
@@ -297,6 +364,13 @@ class LlamaIndexGraphMemory(BaseMemory):
 
     @property
     def node_count(self) -> int:
+        return self._count("MATCH (n) RETURN count(n) AS c")
+
+    @property
+    def edge_count(self) -> int:
+        return self._count("MATCH ()-[r]->() RETURN count(r) AS c")
+
+    def _count(self, cypher: str) -> int:
         import neo4j
 
         uri = self._neo4j_cfg.uri
@@ -304,7 +378,6 @@ class LlamaIndexGraphMemory(BaseMemory):
         try:
             with neo4j.GraphDatabase.driver(uri, auth=auth) as driver:
                 with driver.session(database=self._neo4j_cfg.database) as session:
-                    result = session.run("MATCH (n) RETURN count(n) AS c")
-                    return result.single()["c"]
+                    return session.run(cypher).single()["c"]
         except Exception:
             return 0

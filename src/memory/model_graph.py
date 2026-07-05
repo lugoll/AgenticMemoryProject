@@ -314,6 +314,70 @@ _TRIPLE_RE = re.compile(
 )
 
 
+def _split_list_objects(triples: list[dict[str, str]]) -> list[dict[str, str]]:
+    """
+    Post-processing fallback: if the LLM returns a comma-separated list as
+    the object despite the prompt instruction, split it into individual triples.
+    Heuristic: split only when ≥3 comma-separated parts each ≤40 chars.
+    Short pairs like "New York, USA" (2 parts) are kept intact.
+    """
+    result: list[dict[str, str]] = []
+    for t in triples:
+        parts = [p.strip() for p in t["object"].split(",") if p.strip()]
+        if len(parts) >= 3 and all(len(p) <= 40 for p in parts):
+            for part in parts:
+                result.append({"subject": t["subject"], "predicate": t["predicate"], "object": part})
+        else:
+            result.append(t)
+    return result
+
+
+def parse_triples(raw: str) -> list[dict[str, str]]:
+    """Parse an LLM response into normalised (subject, predicate, object) triples.
+
+    Shared by both graph variants (GraphMemory and LlamaIndexGraphMemory) so they
+    apply identical parsing: JSON-first with a regex fallback for truncated output,
+    list-object splitting, and predicate normalisation against the shared whitelist.
+    Keeps entity casing verbatim (unlike LlamaIndex's default parser, which
+    lowercases via .capitalize() and drops comma-valued objects entirely).
+    """
+    raw = raw or "{}"
+    try:
+        parsed = json.loads(raw)
+        triples = parsed.get("triples", []) if isinstance(parsed, dict) else []
+    except json.JSONDecodeError:
+        matches = list(_TRIPLE_RE.finditer(raw))
+        if matches:
+            logger.debug("parse_triples: JSON truncated, recovered %d triples via regex", len(matches))
+            triples = [{"subject": m.group("s"), "predicate": m.group("p"), "object": m.group("o")} for m in matches]
+        else:
+            logger.warning("parse_triples: JSON parse failed: %r", raw[:200])
+            return []
+
+    valid = [
+        t for t in triples
+        if isinstance(t, dict)
+        and all(isinstance(t.get(k), str) and t.get(k, "").strip() for k in ("subject", "predicate", "object"))
+    ]
+    split = _split_list_objects(valid)
+
+    # Normalise predicates: map LLM-invented free-text predicates to the
+    # nearest entry in _ALLOWED_PREDICATES_SET so the graph stays clean.
+    normalised = []
+    for t in split:
+        raw_p = t["predicate"]
+        norm_p = _normalize_predicate(raw_p, _ALLOWED_PREDICATES_SET)
+        if norm_p != raw_p:
+            logger.debug("parse_triples: predicate %r → %r", raw_p, norm_p)
+        normalised.append({**t, "predicate": norm_p})
+
+    logger.debug(
+        "parse_triples: %d valid → %d after list-split → %d after normalisation",
+        len(valid), len(split), len(normalised),
+    )
+    return normalised
+
+
 class GraphMemory(BaseMemory):
     """
     Knowledge-graph memory backend backed by a NetworkX MultiDiGraph.
@@ -348,11 +412,15 @@ class GraphMemory(BaseMemory):
         # Graph uses its own top_k (graph.top_k) because triples are ~8 words
         # vs. text passages (~50 words). Needs more results to cover 2-hop paths.
         self._top_k: int = config.graph.top_k
+        self._rerank_model: str = config.graph.rerank_model
+        self._rerank_top_n: int = config.graph.rerank_top_n
         self._storage_path: Path = Path(config.stores.graph)
         self._checkpoint_path: Path = self._storage_path.with_suffix(".checkpoint")
         self._graph: nx.MultiDiGraph = nx.MultiDiGraph()
         self._bm25: BM25Okapi | None = None
         self._node_list: list[str] = []
+        # Cross-encoder loaded lazily on first search — no cost during ingest runs.
+        self._reranker = None
         if self._storage_path.exists():
             self._load()
 
@@ -414,6 +482,27 @@ class GraphMemory(BaseMemory):
         corpus = [self._tokenize(str(n)) for n in self._node_list]
         self._bm25 = BM25Okapi(corpus) if corpus else None
 
+    # ── Cross-encoder reranking ────────────────────────────────────────────────
+
+    def _rerank(self, query: str, candidates: list[str]) -> list[str]:
+        """Score candidate triple strings against the query with a cross-encoder
+        and return the top `rerank_top_n` by relevance.
+
+        Replaces the previous BFS-order truncation (seed-rank + hop-distance),
+        which never scored candidates against the query. Runs on CPU with no LLM
+        call, preserving the zero-cost-retrieval property. Loaded lazily so ingest
+        runs never pay the model-load cost.
+        """
+        if not candidates:
+            return []
+        if self._reranker is None:
+            from sentence_transformers import CrossEncoder
+
+            self._reranker = CrossEncoder(self._rerank_model, device="cpu")
+        scores = self._reranker.predict([(query, c) for c in candidates])
+        ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+        return [c for c, _ in ranked[: self._rerank_top_n]]
+
     # ── LLM triple extraction ─────────────────────────────────────────────────
 
     def _extract_triples(self, text: str, phase: str, run_id: str) -> list[dict[str, str]]:
@@ -438,58 +527,9 @@ class GraphMemory(BaseMemory):
             },
         )
         raw = response.choices[0].message.content or "{}"
-        try:
-            parsed = json.loads(raw)
-            triples = parsed.get("triples", []) if isinstance(parsed, dict) else []
-        except json.JSONDecodeError:
-            matches = list(_TRIPLE_RE.finditer(raw))
-            if matches:
-                logger.debug("GraphMemory: JSON truncated, recovered %d triples via regex", len(matches))
-                triples = [{"subject": m.group("s"), "predicate": m.group("p"), "object": m.group("o")} for m in matches]
-            else:
-                logger.warning("GraphMemory: JSON parse failed: %r", raw[:200])
-                return []
-
-        valid = [
-            t for t in triples
-            if isinstance(t, dict)
-            and all(isinstance(t.get(k), str) and t.get(k, "").strip() for k in ("subject", "predicate", "object"))
-        ]
-        split = self._split_list_objects(valid)
-
-        # Normalise predicates: map LLM-invented free-text predicates to the
-        # nearest entry in _ALLOWED_PREDICATES_SET so the graph stays clean.
-        normalised = []
-        for t in split:
-            raw_p = t["predicate"]
-            norm_p = _normalize_predicate(raw_p, _ALLOWED_PREDICATES_SET)
-            if norm_p != raw_p:
-                logger.debug("GraphMemory: predicate %r → %r", raw_p, norm_p)
-            normalised.append({**t, "predicate": norm_p})
-
-        logger.debug(
-            "GraphMemory: %d triples (%d after list-split, %d after normalisation) from %d-char text",
-            len(valid), len(split), len(normalised), len(text),
-        )
-        return normalised
-
-    @staticmethod
-    def _split_list_objects(triples: list[dict[str, str]]) -> list[dict[str, str]]:
-        """
-        Post-processing fallback: if the LLM returns a comma-separated list as
-        the object despite the prompt instruction, split it into individual triples.
-        Heuristic: split only when ≥3 comma-separated parts each ≤40 chars.
-        Short pairs like "New York, USA" (2 parts) are kept intact.
-        """
-        result: list[dict[str, str]] = []
-        for t in triples:
-            parts = [p.strip() for p in t["object"].split(",") if p.strip()]
-            if len(parts) >= 3 and all(len(p) <= 40 for p in parts):
-                for part in parts:
-                    result.append({"subject": t["subject"], "predicate": t["predicate"], "object": part})
-            else:
-                result.append(t)
-        return result
+        triples = parse_triples(raw)
+        logger.debug("GraphMemory: extracted %d triples from %d-char text", len(triples), len(text))
+        return triples
 
     # ── BaseMemory interface ──────────────────────────────────────────────────
 
@@ -568,11 +608,12 @@ class GraphMemory(BaseMemory):
                 if not frontier:
                     break
 
+        reranked = self._rerank(query, results)
         logger.debug(
-            "GraphMemory: query=%r → %d seeds → %d candidates → top %d",
-            query, len(seed_nodes), len(results), self._top_k,
+            "GraphMemory: query=%r → %d seeds → %d candidates → rerank top %d",
+            query, len(seed_nodes), len(results), len(reranked),
         )
-        return results[:self._top_k]
+        return reranked
 
     def update_fact(self, fact: str) -> None:
         if not fact.strip():
