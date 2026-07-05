@@ -7,10 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0,<7",
     "litellm>=1.82,<2",
-    "networkx>=3.0",
     "numpy>=2.0",
     "datasets>=3.0,<4",
-    "chromadb-client>=1.0",
     "sentence-transformers>=3.0",
     "rank-bm25>=0.2.2",
     "python-dotenv>=1.2.2",

@@ -29,12 +29,16 @@ llm:
     temperature: 0.0
     max_tokens: 5
 
+# Gerät für alle lokalen Torch-Modelle (Embedder + Cross-Encoder-Reranker).
+# "auto" → cuda wenn verfügbar, sonst cpu. Kein LLM-Call, keine API-Kosten —
+# betrifft nur die Latenz der lokalen Inferenz.
+device: "auto"
+
 embedding:
   # BAAI/bge-base-en-v1.5: MIT-Lizenz, ~400MB, Top-Performer BEIR-Benchmark (2023).
-  # Läuft vollständig auf CPU via sentence-transformers — keine API-Kosten.
+  # Läuft lokal via sentence-transformers (Gerät siehe `device`) — keine API-Kosten.
   model: "BAAI/bge-base-en-v1.5"
   batch_size: 32
-  chroma_host: "http://localhost:8000"
 
 retrieval:
   top_k: 5
@@ -48,21 +52,28 @@ graph:
   max_hops: 3                # HotpotQA braucht bis zu 3 Hops
   top_k: 10                  # Graph-Triples sind kurz (~8 Wörter) vs. Textpassagen (~50 Wörter)
                              # bei top_k=5 fehlt Hop 2 fast immer im Context
-  # Cross-Encoder-Reranker für beide Graph-Varianten (graph + llamagraph).
-  # Läuft auf CPU, kein LLM-Call → bewahrt die Zero-Cost-Retrieval-Eigenschaft.
+  # Sicherheits-Caps gegen Hub-Explosion bei der BFS-Expansion. Ohne Caps kann
+  # ein Hub-Knoten tausende Kandidaten erzeugen, die der Reranker alle scoren
+  # muss. Jeder Cap-Treffer wird als Warning geloggt.
+  max_frontier: 200          # max. Entities pro Hop-Frontier
+  max_candidates: 1000       # max. Kandidaten-Triples vor dem Reranking
+  # Cross-Encoder-Reranker, geteilt von allen Graph-Varianten (src/memory/reranker.py).
+  # Kein LLM-Call → bewahrt die Zero-Cost-Retrieval-Eigenschaft (Gerät siehe `device`).
   # Ersetzt die reine BFS-/Similarity-Reihenfolge durch Query-Relevanz vor der Truncation.
   rerank_model: "BAAI/bge-reranker-base"
   rerank_top_n: 10           # finale Context-Größe nach dem Reranking (Default = top_k)
 
+# Neo4j ist der einzige Store: Chunks (Volltext- + Vektor-Index) und der
+# extrahierte Knowledge Graph liegen in derselben Datenbank — ein Ingest-Lauf
+# bedient alle Retrieval-Varianten.
 stores:
-  bm25: "data/stores/bm25.db"
-  graph: "data/stores/graph.json"
-  vector: "vector_hotpotqa"  # ChromaDB collection name
   neo4j:
     uri: "bolt://localhost:7687"
     username: "neo4j"
     password: "password"
     database: "neo4j"
+  chunk_fulltext_index: "chunk_fulltext"   # Lucene BM25 über Chunk.text
+  chunk_vector_index: "chunk_vector"       # Cosine-HNSW über Chunk.embedding
 
 telemetry:
   output_dir: "evaluations/"

@@ -2,7 +2,7 @@
 
 Set USE_NATIVE_OLLAMA=true to skip starting/stopping the ollama-agent and
 ollama-judge containers (e.g. when running natively on Mac via native Ollama).
-ChromaDB is still managed via Docker unless you run it separately too.
+Neo4j is still managed via Docker unless you run it separately too.
 """
 
 import os
@@ -47,13 +47,10 @@ def stop_containers(containers: list[str]) -> None:
 
 
 def get_required_containers(variant: str) -> list[str]:
-    """Get list of containers needed for this variant."""
-    containers = []
-    if variant == "vector":
-        containers.append("chromadb")
-    elif variant == "graph":
-        containers.extend(["chromadb", "ollama-agent"])
-    elif variant == "llamagraph":
-        containers.extend(["neo4j", "ollama-agent"])
-    # bm25 doesn't need any containers
-    return containers
+    """Get list of containers needed for this variant.
+
+    Every variant reads from the unified Neo4j store; ollama-agent is needed
+    for the unified ingest (triple extraction) and for QA answering. With
+    USE_NATIVE_OLLAMA the ollama containers are filtered out at start/stop.
+    """
+    return ["neo4j", "ollama-agent"]

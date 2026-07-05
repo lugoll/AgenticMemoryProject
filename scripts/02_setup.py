@@ -1,16 +1,20 @@
 """
-Phase 2 — Store aufbauen für eine Variante.
+Phase 2 — Unified Store aufbauen (ein Lauf für alle Retrieval-Varianten).
 
 Aufruf:
-    uv run python scripts/02_setup.py --variant bm25   --data data/hotpotqa.json
-    uv run python scripts/02_setup.py --variant vector  --data data/hotpotqa.json
-    uv run python scripts/02_setup.py --variant graph   --data data/hotpotqa.json
-    uv run python scripts/02_setup.py --variant graph   --data data/hotpotqa.json --n 50
+    uv run python scripts/02_setup.py --data data/hotpotqa.json
+    uv run python scripts/02_setup.py --data data/hotpotqa.json --n 50
+    uv run python scripts/02_setup.py --data data/hotpotqa.json --resume
 
 --n begrenzt die Anzahl der ingestierten Dokumente (nützlich für schnelle Tests).
 Ohne --n werden alle Dokumente in der Datei verarbeitet.
+--resume macht ab dem letzten Checkpoint (in Neo4j persistiert) weiter.
 
-Ausgabe: evaluations/<variant>_<ts>_setup.json
+Der Ingest schreibt Chunks (mit Embedding, Volltext- und Vektor-Index) sowie
+den extrahierten Knowledge Graph in dieselbe Neo4j-Datenbank. Danach können
+alle Varianten (bm25, vector, graph, vectorgraph) ohne weiteren Ingest laufen.
+
+Ausgabe: evaluations/unified_<ts>_setup.json
 """
 from __future__ import annotations
 
@@ -36,27 +40,26 @@ def _read_telemetry(path: Path) -> list[dict]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RAG-Store aufbauen")
-    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph", "llamagraph"])
+    parser = argparse.ArgumentParser(description="Unified RAG-Store aufbauen")
     parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
     parser.add_argument("--n", type=int, default=None,
                         help="Maximale Anzahl Dokumente (default: alle). "
                              "Nützlich für schnelle Tests, z.B. --n 50.")
     parser.add_argument("--resume", action="store_true",
-                        help="Weitermachen ab dem letzten Checkpoint (nur graph)")
+                        help="Weitermachen ab dem letzten Checkpoint")
     args = parser.parse_args()
 
     cfg = load_config()
     output_dir = Path(cfg.telemetry.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    containers = get_required_containers(args.variant)
+    containers = get_required_containers("unified")
     if containers:
-        print(f"Starting containers for {args.variant}...")
+        print("Starting containers for unified ingest...")
         ensure_containers_running(containers)
 
     try:
-        tracker = register_tracker(output_dir=output_dir, variant_name=args.variant)
+        tracker = register_tracker(output_dir=output_dir, variant_name="unified")
 
         with args.data.open(encoding="utf-8") as f:
             data = json.load(f)
@@ -65,33 +68,17 @@ def main() -> None:
         if args.n is not None:
             documents = documents[: args.n]
 
-        print(f"Variante: {args.variant}  |  Dokumente: {len(documents)}"
+        print(f"Unified Ingest  |  Dokumente: {len(documents)}"
               + (f"  (von {len(data['documents'])} gesamt, --n {args.n})" if args.n else ""))
 
-        if args.variant == "bm25":
-            from src.memory.model_bm25 import BM25Memory
-            memory = BM25Memory(
-                top_k=cfg.retrieval.top_k,
-                storage_path=Path(cfg.stores.bm25),
-            )
-        elif args.variant == "vector":
-            from src.memory.model_vector import VectorMemory
-            memory = VectorMemory(config=cfg)
-        elif args.variant == "graph":
-            from src.memory.model_graph import GraphMemory
-            memory = GraphMemory(config=cfg)
-        elif args.variant == "llamagraph":
-            from src.memory.model_llamagraph import LlamaIndexGraphMemory
-            memory = LlamaIndexGraphMemory(config=cfg)
-        else:
-            raise ValueError(f"Unbekannte Variante: {args.variant}")
+        from src.memory import UnifiedMemoryStore
+        memory = UnifiedMemoryStore(config=cfg)
 
         t0 = time.perf_counter()
-        if args.resume and args.variant == "graph":
-            assert isinstance(memory, GraphMemory)
+        if args.resume:
             start_from = memory.read_checkpoint()
             if start_from > 0:
-                print(f"Resume ab Dokument {start_from + 1}/{len(documents)}")
+                print(f"Resume ab Chunk {start_from + 1}")
             else:
                 print("Kein Checkpoint gefunden — starte von vorne")
                 memory.reset()
@@ -106,9 +93,17 @@ def main() -> None:
         tel = _read_telemetry(tracker.telemetry_path)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         setup_stats = {
-            "variant":                  args.variant,
+            "variant":                  "unified",
             "n_documents":              len(documents),
+            "n_chunks":                 memory.chunk_count,
+            "n_entities":               memory.entity_count,
+            "n_edges":                  memory.edge_count,
             "ingest_time_s":            round(elapsed, 2),
+            # Kosten-Attribution pro Variante: Chunk-Embedding (CPU, keine
+            # LLM-Tokens) = Anteil von bm25/vector; Graph-Extraktion (LLM) =
+            # Anteil der Graph-Varianten.
+            "chunk_embed_time_s":       memory.ingest_timings.get("chunk_embed_s", 0.0),
+            "graph_extract_time_s":     memory.ingest_timings.get("graph_extract_s", 0.0),
             "ingest_tokens_prompt":     sum(r.get("prompt_tokens", 0)     for r in tel),
             "ingest_tokens_completion": sum(r.get("completion_tokens", 0) for r in tel),
             "ingest_tokens_total":      sum(r.get("total_tokens", 0)      for r in tel),
@@ -116,11 +111,13 @@ def main() -> None:
             "created_at":               datetime.now(timezone.utc).isoformat(),
         }
 
-        out_path = output_dir / f"{args.variant}_{ts}_setup.json"
+        out_path = output_dir / f"unified_{ts}_setup.json"
         out_path.write_text(json.dumps(setup_stats, indent=2), encoding="utf-8")
 
         print(f"Setup-Stats -> {out_path}")
         print(f"  Zeit      : {elapsed:.1f}s")
+        print(f"  Chunks    : {setup_stats['n_chunks']}")
+        print(f"  Entities  : {setup_stats['n_entities']}  |  Kanten: {setup_stats['n_edges']}")
         print(f"  LLM-Calls : {setup_stats['llm_calls']}")
         print(f"  Tokens    : {setup_stats['ingest_tokens_total']}")
 

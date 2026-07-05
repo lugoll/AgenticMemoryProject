@@ -186,6 +186,33 @@ class TelemetryTracker(CustomLogger):
         """Total successful LLM calls intercepted since this tracker was created."""
         return self._call_count
 
+    def record_retrieval(
+        self,
+        *,
+        actor: str,
+        variant_name: str,
+        run_id: str,
+        duration_ms: float,
+        **extra: Any,
+    ) -> None:
+        """Append one non-LLM retrieval-overhead record (phase=retrieval_overhead).
+
+        Covers local, zero-token work that LiteLLM never sees — vector/fulltext
+        queries, BFS expansion, cross-encoder reranking. ``extra`` carries
+        actor-specific counters (candidate counts, caps-hit flags, ...).
+        """
+        record = {
+            "event": "retrieval",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_id": run_id,
+            "phase": "retrieval_overhead",
+            "actor": actor,
+            "variant_name": variant_name,
+            "duration_ms": round(duration_ms, 2),
+            **extra,
+        }
+        self._write(record)
+
 
 def register_tracker(
     log_level: str = "INFO",
@@ -221,4 +248,42 @@ def register_tracker(
         cb for cb in litellm._async_success_callback if not isinstance(cb, TelemetryTracker)
     ]
     litellm.callbacks = [tracker]
+    global _active_tracker
+    _active_tracker = tracker
     return tracker
+
+
+# ── Retrieval-overhead events (non-LLM local work) ───────────────────────────
+#
+# The memory models run zero-token local inference (vector/fulltext queries,
+# BFS expansion, cross-encoder reranking) that never passes through LiteLLM.
+# They report it here; records land in the same session JSONL as the LLM calls
+# with phase="retrieval_overhead". Everything no-ops when no tracker is
+# registered (e.g. unit tests) so retrieval code never depends on telemetry.
+
+_active_tracker: TelemetryTracker | None = None
+_current_run_id: str = "unknown"
+
+
+def set_run_context(run_id: str) -> None:
+    """Bind subsequent retrieval-overhead events to one QA run (call per question)."""
+    global _current_run_id
+    _current_run_id = run_id
+
+
+def record_retrieval_event(
+    actor: str, variant_name: str, duration_ms: float, **extra: Any
+) -> None:
+    """Record one retrieval-overhead event on the active tracker (no-op without one)."""
+    if _active_tracker is None:
+        return
+    try:
+        _active_tracker.record_retrieval(
+            actor=actor,
+            variant_name=variant_name,
+            run_id=_current_run_id,
+            duration_ms=duration_ms,
+            **extra,
+        )
+    except Exception as exc:  # telemetry must never break retrieval
+        logger.debug("retrieval telemetry skipped: %s", exc)

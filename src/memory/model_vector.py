@@ -1,182 +1,79 @@
 from __future__ import annotations
 
 import logging
-import uuid
+import time
 
 from src.config.cfg import Config
+from src.telemetry import record_retrieval_event
 from .base import BaseMemory
 
 logger = logging.getLogger(__name__)
 
 
-def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
-    """Split text into overlapping word-boundary chunks.
-
-    chunk_size and chunk_overlap are measured in words, not characters,
-    which is more stable across different paragraph lengths.
-    """
-    words = text.split()
-    if not words:
-        return []
-
-    chunks: list[str] = []
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-        chunks.append(" ".join(words[start:end]))
-        if end == len(words):
-            break
-        start += chunk_size - chunk_overlap
-
-    return chunks
-
-
 class VectorMemory(BaseMemory):
     """
-    ChromaDB HTTP-backed memory with sentence-transformer embeddings.
+    Vector RAG retrieval view over the shared Neo4j store.
 
-    Connects to a ChromaDB HTTP server (separate Docker container) so the
-    vector index survives container restarts and is isolated from the app process.
+    Queries the native Neo4j vector index over ``Chunk.embedding`` (cosine).
+    The query is embedded locally with the shared sentence-transformer — no
+    LLM call, no API key.
 
-    Embeddings are computed locally inside the app container via
-    sentence-transformers — no LLM call required, no API key.
-    Vectors are passed pre-computed to ChromaDB (chromadb-client, no C++ needed).
-
-    Collection name comes from config.memory_path so variants coexist on the
-    same ChromaDB server without collision.
+    Score semantics: Neo4j's cosine vector index reports
+    ``score = (1 + cos) / 2`` in [0, 1] — identical to the previous ChromaDB
+    conversion ``1 - distance/2``, so ``retrieval.similarity_cutoff`` keeps
+    its meaning unchanged.
     """
 
     def __init__(self, config: Config) -> None:
-        # Lazy imports: chromadb and sentence-transformers are Docker-only deps.
-        # Importing here (not at module level) lets other modules import
-        # model_vector without these packages being installed locally.
-        import chromadb
-        from sentence_transformers import SentenceTransformer
-        from urllib.parse import urlparse
-
-        self._config = config
-        self._collection_name: str = config.stores.vector
-
-        self._encoder = SentenceTransformer(config.embedding.model, device="cpu")
-
-        # chromadb-client 1.x HttpClient expects host/port separately
-        parsed = urlparse(config.embedding.chroma_host)
-        self._client = chromadb.HttpClient(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 8000,
-            ssl=(parsed.scheme == "https"),
-        )
-
-        self._collection = self._client.get_or_create_collection(
-            name=self._collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.debug(
-            "VectorMemory: connected to %s, collection=%r, size=%d",
-            config.embedding.chroma_host,
-            self._collection_name,
-            self._collection.count(),
-        )
-
-    def _embed(self, texts: list[str]) -> list[list[float]]:
-        """Compute embeddings and return as plain Python float lists."""
-        vectors = self._encoder.encode(texts, show_progress_bar=False)
-        return vectors.tolist()
-
-    # ---- BaseMemory interface ----
-
-    def ingest_documents(self, documents: list[str]) -> None:
-        """Chunk documents, embed, and upsert into ChromaDB in batches."""
-        chunk_size = self._config.ingestion.chunk_size
-        chunk_overlap = self._config.ingestion.chunk_overlap
-        batch_size = self._config.embedding.batch_size
-
-        all_chunks: list[str] = []
-        for doc in documents:
-            stripped = doc.strip()
-            if stripped:
-                all_chunks.extend(_chunk_text(stripped, chunk_size, chunk_overlap))
-
-        if not all_chunks:
-            logger.warning("VectorMemory: no chunks produced from %d documents", len(documents))
-            return
-
-        for batch_start in range(0, len(all_chunks), batch_size):
-            batch = all_chunks[batch_start : batch_start + batch_size]
-            embeddings = self._embed(batch)
-            ids = [str(uuid.uuid4()) for _ in batch]
-            self._collection.upsert(documents=batch, embeddings=embeddings, ids=ids)
-
-        logger.debug(
-            "VectorMemory: ingested %d documents → %d chunks, store size=%d",
-            len(documents),
-            len(all_chunks),
-            self._collection.count(),
-        )
+        super().__init__(config)
+        self._top_k: int = config.retrieval.top_k
+        self._cutoff: float = config.retrieval.similarity_cutoff
 
     def search(self, query: str) -> list[str]:
-        """Return up to top_k passages by cosine similarity, filtered by cutoff."""
+        """Return up to top_k chunks by cosine similarity, filtered by cutoff."""
         if not query.strip():
             return []
 
-        count = self._collection.count()
-        if count == 0:
+        t0 = time.perf_counter()
+        # get_text_embedding (not get_query_embedding) to avoid any
+        # instruction-prefix formatting — matches the previous raw
+        # SentenceTransformer.encode behaviour.
+        query_embedding = self.embed_model.get_text_embedding(query)
+
+        try:
+            rows = self._cypher(
+                "CALL db.index.vector.queryNodes($index, $top_k, $embedding) "
+                "YIELD node, score "
+                "RETURN node.text AS text, score",
+                index=self._vector_index,
+                top_k=self._top_k,
+                embedding=query_embedding,
+            )
+        except Exception as exc:
+            # Index missing (ingest not run yet) — behave like an empty store.
+            logger.warning("VectorMemory: vector query failed: %s", exc)
             return []
 
-        top_k = self._config.retrieval.top_k
-        cutoff = self._config.retrieval.similarity_cutoff
-
-        query_embedding = self._embed([query])[0]
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(top_k, count),
-            include=["documents", "distances"],
+        passages = [
+            r["text"]
+            for r in rows
+            if r["score"] >= self._cutoff and r["text"] and r["text"].strip()
+        ]
+        record_retrieval_event(
+            "vector_query", self.get_backend_name(),
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            candidates=len(rows), returned=len(passages),
         )
-
-        passages: list[str] = []
-        docs = results.get("documents", [[]])[0]
-        distances = results.get("distances", [[]])[0]
-
-        for doc, dist in zip(docs, distances):
-            # ChromaDB cosine distance: 0 = identical, 2 = opposite.
-            # Convert to similarity: similarity = 1 - (distance / 2).
-            similarity = 1.0 - (dist / 2.0)
-            if similarity >= cutoff:
-                passages.append(doc)
-
         logger.debug(
             "VectorMemory: query=%r → %d/%d results above cutoff %.2f",
-            query,
-            len(passages),
-            len(docs),
-            cutoff,
+            query, len(passages), len(rows), self._cutoff,
         )
         return passages
-
-    def update_fact(self, fact: str) -> None:
-        """Embed and insert a single fact, making it immediately searchable."""
-        stripped = fact.strip()
-        if stripped:
-            embedding = self._embed([stripped])[0]
-            self._collection.upsert(
-                documents=[stripped],
-                embeddings=[embedding],
-                ids=[str(uuid.uuid4())],
-            )
-            logger.debug("VectorMemory: updated fact=%r", stripped)
-
-    def reset(self) -> None:
-        """Delete the collection and recreate it empty."""
-        self._client.delete_collection(self._collection_name)
-        self._collection = self._client.get_or_create_collection(
-            name=self._collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.debug("VectorMemory: reset — collection %r recreated", self._collection_name)
 
     def get_backend_name(self) -> str:
         return "vector"
 
     @property
     def store_size(self) -> int:
-        return self._collection.count()
+        """Number of chunks currently stored (shared-store view)."""
+        return self.chunk_count

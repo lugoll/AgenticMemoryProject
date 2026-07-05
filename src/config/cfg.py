@@ -5,7 +5,8 @@ typisierte Dataclass-Objekte zurück. Kein Pydantic, kein Overhead.
 Env var overrides (useful for native Ollama on Mac, no Docker):
   OLLAMA_AGENT_URL  — overrides llm.agent.base_url and llm.ingest.base_url
   OLLAMA_JUDGE_URL  — overrides llm.judge.base_url
-  CHROMA_HOST       — overrides embedding.chroma_host
+  NEO4J_URI         — overrides stores.neo4j.uri
+  NEO4J_PASSWORD    — overrides stores.neo4j.password
 """
 from __future__ import annotations
 
@@ -39,7 +40,6 @@ class LLMsCfg:
 class EmbeddingCfg:
     model: str
     batch_size: int
-    chroma_host: str
 
 
 @dataclass
@@ -58,8 +58,12 @@ class IngestionCfg:
 class GraphCfg:
     max_hops: int
     top_k: int = 10          # Override retrieval.top_k — triples are short, need more context
-    # Cross-encoder reranker shared by both graph variants (graph + llamagraph).
-    # Runs on CPU, no LLM call → preserves the zero-cost-retrieval property.
+    # Safety caps against hub explosion during BFS expansion; every cap hit
+    # is logged as a warning so truncated retrievals are visible in the logs.
+    max_frontier: int = 200      # max entities per hop frontier
+    max_candidates: int = 1000   # max candidate triples before reranking
+    # Cross-encoder reranker shared by all graph variants (src/memory/reranker.py).
+    # No LLM call → preserves the zero-cost-retrieval property (device: see Config.device).
     rerank_model: str = "BAAI/bge-reranker-base"
     rerank_top_n: int = 10   # Final context size after reranking (default = top_k)
 
@@ -74,10 +78,10 @@ class Neo4jCfg:
 
 @dataclass
 class StoresCfg:
-    bm25: str
-    graph: str
-    vector: str
-    neo4j: Neo4jCfg = None  # type: ignore[assignment]
+    neo4j: Neo4jCfg
+    # Chunk-level index names in the shared Neo4j store.
+    chunk_fulltext_index: str = "chunk_fulltext"
+    chunk_vector_index: str = "chunk_vector"
 
 
 @dataclass
@@ -94,6 +98,18 @@ class Config:
     graph: GraphCfg
     stores: StoresCfg
     telemetry: TelemetryCfg
+    # Device for all local torch models (embedder + cross-encoder reranker):
+    # "auto" | "cpu" | "cuda". Resolve via resolve_device().
+    device: str = "auto"
+
+
+def resolve_device(setting: str) -> str:
+    """Map the config ``device`` setting to a concrete torch device string."""
+    if setting != "auto":
+        return setting
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
@@ -104,8 +120,6 @@ def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
         raw["llm"]["ingest"]["base_url"] = url
     if url := os.environ.get("OLLAMA_JUDGE_URL"):
         raw["llm"]["judge"]["base_url"] = url
-    if host := os.environ.get("CHROMA_HOST"):
-        raw["embedding"]["chroma_host"] = host
     if uri := os.environ.get("NEO4J_URI"):
         raw["stores"]["neo4j"]["uri"] = uri
     if pw := os.environ.get("NEO4J_PASSWORD"):
@@ -122,10 +136,10 @@ def load_config(path: Path = Path("src/config/unified_config.yaml")) -> Config:
         ingestion=IngestionCfg(**raw["ingestion"]),
         graph=GraphCfg(**raw["graph"]),
         stores=StoresCfg(
-            bm25=raw["stores"]["bm25"],
-            graph=raw["stores"]["graph"],
-            vector=raw["stores"]["vector"],
-            neo4j=Neo4jCfg(**raw["stores"]["neo4j"]) if "neo4j" in raw["stores"] else None,
+            neo4j=Neo4jCfg(**raw["stores"]["neo4j"]),
+            chunk_fulltext_index=raw["stores"].get("chunk_fulltext_index", "chunk_fulltext"),
+            chunk_vector_index=raw["stores"].get("chunk_vector_index", "chunk_vector"),
         ),
         telemetry=TelemetryCfg(**raw["telemetry"]),
+        device=raw.get("device", "auto"),
     )

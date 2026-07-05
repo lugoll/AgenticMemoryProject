@@ -1,16 +1,23 @@
 # AgenticMemoryProject
 
-Wissenschaftliches Benchmark-Framework zum Vergleich von drei RAG-Retrieval-Architekturen
+Wissenschaftliches Benchmark-Framework zum Vergleich von vier RAG-Retrieval-Architekturen
 auf Token-Effizienz und Antwortqualität bei Multi-Hop-Fragen (HotpotQA).
 
 **Forschungsfrage:** Welcher RAG-Ansatz erzielt die höchste Antwortqualität auf Multi-Hop-Fragen —
 und wie verhält sich das im Verhältnis zum Token-Verbrauch?
 
-| Variante | Architektur | Ingest-Aufwand |
+Alle Varianten lesen aus **einem gemeinsamen Neo4j-Store** (Unified Ingest):
+Chunks werden einmal gespeichert, embedded und volltext-indiziert, der Knowledge
+Graph einmal per LLM extrahiert. Die Varianten unterscheiden sich nur im Retrieval —
+dadurch operieren alle auf identischen Daten (höhere interne Validität) und der
+Ingest läuft genau einmal.
+
+| Variante | Retrieval-Architektur | Retrieval-Kosten |
 |---|---|---|
-| `bm25` | BM25 Keyword-Suche | keiner (Store im Repo) |
-| `vector` | Semantic Embeddings via ChromaDB | ~72s lokal (kein LLM) |
-| `graph` | Knowledge Graph + BFS via NetworkX | ~100 Min (LLM, Store im Repo) |
+| `bm25` | Lucene-Volltextindex (BM25) über Chunks | keine (kein LLM, kein Embedding) |
+| `vector` | Neo4j-Vektorindex (Cosine) über Chunk-Embeddings | 1 Query-Embedding (CPU) |
+| `graph` | BM25 Entity-Linking + Hop-für-Hop-BFS über den Knowledge Graph + Cross-Encoder-Rerank | keine (CPU-only) |
+| `vectorgraph` | Vektor-verankerte Entity-Suche + Graph-Traversierung (LlamaIndex) + Cross-Encoder-Rerank | 1 Query-Embedding (CPU) |
 
 ---
 
@@ -41,7 +48,7 @@ Prüfen ob alles läuft:
 
 ```bash
 docker compose ps
-# Erwartet: chromadb, ollama-agent, ollama-judge alle "running"
+# Erwartet: neo4j, ollama-agent, ollama-judge alle "running"
 ```
 
 ### Schritt 4 — LLM-Modelle laden (einmalig, ~14 GB gesamt)
@@ -64,30 +71,36 @@ Ausgabe: `data/hotpotqa.json` mit 500 Fragen (250 bridge, 250 comparison) und ~3
 
 > Dauer: ~10–30 Sekunden (HuggingFace-Download beim ersten Mal etwas länger).
 
-### Schritt 6 — Vector-Store aufbauen
-
-BM25 und Graph sind bereits als fertige Stores im Repository enthalten (`data/stores/`).
-Nur der Vector-Store muss lokal aufgebaut werden (ChromaDB-Volume ist nicht committbar):
+### Schritt 6 — Unified Store aufbauen (ein Lauf für alle Varianten)
 
 ```bash
-uv run python scripts/02_setup.py --variant vector --data data/hotpotqa.json
+uv run python scripts/02_setup.py --data data/hotpotqa.json
 ```
 
-> Dauer: ~72 Sekunden. Kein LLM-Call — nur lokale Embeddings (BAAI/bge-base-en-v1.5).
+Der Ingest schreibt in dieselbe Neo4j-Datenbank:
+1. **Chunks** (300 Wörter, 50 Overlap) mit lokalem Embedding (BAAI/bge-base-en-v1.5, CPU)
+2. **Volltext-Index** (Lucene/BM25) und **Vektor-Index** (Cosine) über die Chunks
+3. **Knowledge Graph**: LLM-Triple-Extraktion (LlamaIndex + JSON-Schema, Prädikat-Whitelist)
+
+> Dauer: mehrere Stunden bei N=500 (LLM-Extraktion dominiert; Chunk-Embedding ~1–2 Min).
+> Abbruch ist unkritisch — `--resume` macht ab dem letzten Checkpoint (in Neo4j) weiter.
+> Die Kosten-Attribution pro Variante steht im Setup-Report
+> (`chunk_embed_time_s` = bm25/vector-Anteil, `graph_extract_time_s` + Tokens = Graph-Anteil).
 
 ---
 
 ## Experiment ausführen
 
-### Schritt 7 — Alle drei Varianten laufen lassen
+### Schritt 7 — Alle vier Varianten laufen lassen
 
 ```bash
-uv run python scripts/03_run.py --variant bm25   --n 500
-uv run python scripts/03_run.py --variant vector --n 500
-uv run python scripts/03_run.py --variant graph  --n 500
+uv run python scripts/03_run.py --variant bm25        --n 500
+uv run python scripts/03_run.py --variant vector      --n 500
+uv run python scripts/03_run.py --variant graph       --n 500
+uv run python scripts/03_run.py --variant vectorgraph --n 500
 ```
 
-> Dauer pro Variante: BM25 ~5 Min | Vector ~12 Min | Graph ~15 Min  
+> Kein weiterer Ingest nötig — alle Varianten lesen aus dem Unified Store.  
 > Ausgabe je: `evaluations/<variante>_<timestamp>_results.jsonl`
 
 ### Schritt 8 — Ergebnisse auswerten
@@ -113,16 +126,17 @@ cat evaluations/graph_*_scores.jsonl | head -20
 
 ## Wiederholung (nach erstem Setup)
 
-Wenn Docker bereits läuft und Modelle geladen sind:
+Wenn Docker bereits läuft, Modelle geladen sind und der Unified Store existiert:
 
 ```bash
 # Nur wenn Datensatz noch nicht existiert:
 uv run python scripts/01_load_hotpotqa.py --n 500 --out data/hotpotqa.json
 
-# Runs starten (BM25 + Graph: kein Ingest nötig, Stores aus Git)
-uv run python scripts/03_run.py --variant bm25   --n 500
-uv run python scripts/03_run.py --variant vector --n 500
-uv run python scripts/03_run.py --variant graph  --n 500
+# Runs starten (kein Ingest nötig — Unified Store liegt im Neo4j-Volume)
+uv run python scripts/03_run.py --variant bm25        --n 500
+uv run python scripts/03_run.py --variant vector      --n 500
+uv run python scripts/03_run.py --variant graph       --n 500
+uv run python scripts/03_run.py --variant vectorgraph --n 500
 
 # Evaluation
 uv run python scripts/04_evaluate.py --all
@@ -130,17 +144,24 @@ uv run python scripts/04_evaluate.py --all
 
 ---
 
-## Stores: Was ist im Repository enthalten?
+## Der Unified Store
 
-| Store | Datei | Im Git? | Neu aufbauen |
-|---|---|---|---|
-| BM25 | `data/stores/bm25.db` | ✅ ja | `02_setup.py --variant bm25` (< 1 Min) |
-| Graph | `data/stores/graph.json` | ✅ ja | `02_setup.py --variant graph` (~6–7 Std, LLM) |
-| Vector | ChromaDB Docker Volume | ❌ nein | `02_setup.py --variant vector` (~5 Min) |
+Alles liegt im Neo4j-Docker-Volume (`neo4j_data`) — es gibt keine Store-Dateien mehr im Repo:
 
-**Warum ChromaDB nicht im Repo?** ChromaDB speichert den Index als binäres Docker Volume —
-kein git-taugliches Format. BM25 (~1 MB) und Graph (~7 MB bei N=500) liegen als
-JSON/SQLite-Dateien vor und sind gut git-committbar.
+| Inhalt | Schema | Genutzt von |
+|---|---|---|
+| Chunks | `(:Chunk {text, embedding})` | bm25, vector |
+| Volltext-Index | `chunk_fulltext` (Lucene/BM25 über `Chunk.text`) | bm25 |
+| Vektor-Index | `chunk_vector` (Cosine über `Chunk.embedding`) | vector |
+| Knowledge Graph | `(:__Entity__ {name})-[PRÄDIKAT]->(:__Entity__)` + `MENTIONS` von Chunks | graph, vectorgraph |
+| Checkpoint | `(:Meta {key: 'ingest_checkpoint'})` | 02_setup `--resume` |
+
+Browser-UI zum Inspizieren: <http://localhost:7474> (neo4j / password).
+
+**Methodik-Hinweis:** Durch die Migration auf den Unified Store haben sich zwei
+Scoring-Implementierungen geändert (BM25: SQLite FTS5 → Lucene; Vector: ChromaDB →
+Neo4j-HNSW, Score-Semantik identisch `(1+cos)/2`). Ergebnisse von vor der Migration
+sind daher nicht direkt vergleichbar — alle Varianten müssen neu gelaufen werden.
 
 ---
 
@@ -171,6 +192,9 @@ graph:
 retrieval:
   top_k:             5     # Textpassagen für BM25 und Vector
   similarity_cutoff: 0.5   # Cutoff für Vector-Similarity
+
+stores:
+  neo4j: bolt://localhost:7687  # Der eine Store für alle Varianten
 ```
 
 ---
@@ -181,19 +205,16 @@ retrieval:
 AgenticMemoryProject/
 ├── src/
 │   ├── config/        unified_config.yaml + Dataclass-Loader (cfg.py)
-│   ├── memory/        BaseMemory + Implementierungen (bm25, vector, graph)
+│   ├── memory/        BaseMemory (Neo4j + Unified Ingest) + Retrieval-Views
+│   │                  (bm25, vector, graph, vectorgraph) + extraction.py
 │   └── telemetry/     LiteLLM Callback → JSONL Token-Tracking
 ├── scripts/
 │   ├── 01_load_hotpotqa.py    HuggingFace → data/hotpotqa.json
-│   ├── 02_setup.py            Store aufbauen (bm25 | vector | graph)
-│   ├── 03_run.py              Experiment ausführen
+│   ├── 02_setup.py            Unified Ingest (einmal für alle Varianten)
+│   ├── 03_run.py              Experiment ausführen (--variant ...)
 │   └── 04_evaluate.py         EM + F1 + LLM-Judge + summary_table.json
 ├── data/
-│   ├── hotpotqa.json          Datensatz (nicht im Git, per 01_load erzeugen)
-│   └── stores/
-│       ├── bm25.db            ✅ im Git
-│       ├── graph.json         ✅ im Git
-│       └── graph.checkpoint   ✅ im Git
+│   └── hotpotqa.json          Datensatz (nicht im Git, per 01_load erzeugen)
 ├── evaluations/               Run-Outputs (nicht im Git)
 └── docs/
     └── graphrag_analysis.md   Analyse: Triple-Extraktion vs. HotpotQA, Paper-Vergleich

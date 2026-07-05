@@ -1,19 +1,5 @@
 services:
 
-  # ── Vector store ─────────────────────────────────────────────────────────────
-  # ChromaDB HTTP server für VectorMemory. IS_PERSISTENT=TRUE → Index überlebt Restart.
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: chromadb
-    ports:
-      - "8000:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - IS_PERSISTENT=TRUE
-      - ANONYMIZED_TELEMETRY=FALSE
-    restart: no
-
   # ── LLM Agent + Ingest ───────────────────────────────────────────────────────
   # QA-Agent und Graph-Triple-Extraktion (sequenziell, nie gleichzeitig mit dem Judge).
   # Modelle werden nach Container-Start per `docker exec ollama-agent ollama pull` geladen.
@@ -56,11 +42,13 @@ services:
               capabilities: [gpu]
     restart: no
 
-  # ── Knowledge Graph Store ────────────────────────────────────────────────────
-  # Neo4j 5.x für die GraphMemory. Browser-UI: http://localhost:7474 (neo4j / password),
+  # ── Unified Memory Store ─────────────────────────────────────────────────────
+  # Neo4j als einziger Store für ALLE Varianten: Chunks (Volltext- + Vektor-Index)
+  # und Knowledge Graph. Browser-UI: http://localhost:7474 (neo4j / password),
   # Bolt-Port 7687 für Python-Driver und LlamaIndex.
+  # Version gepinnt (Vektor-Index braucht ≥ 5.13; 5.26 = LTS) für Reproduzierbarkeit.
   neo4j:
-    image: neo4j:5
+    image: neo4j:5.26
     container_name: neo4j
     ports:
       - "7474:7474"
@@ -73,7 +61,6 @@ services:
     restart: no
 
 volumes:
-  chroma_data:
   ollama_agent_models:
   ollama_judge_models:
   neo4j_data:
