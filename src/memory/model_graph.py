@@ -335,9 +335,11 @@ class GraphMemory(BaseMemory):
 
     Retrieval (Phase B):
         search() uses BM25 over node names to find the best-matching entry
-        nodes for the query (entity linking), then runs nx.ego_graph BFS
-        (radius=max_hops, undirected) from those nodes to collect context
-        triples. No LLM call at retrieval time.
+        nodes for the query (entity linking), then runs a manual per-seed
+        hop-by-hop BFS (undirected, radius=max_hops) from those nodes to collect
+        context triples. The BFS is level-by-level (not nx.ego_graph) so that
+        1-hop edges are emitted before 2-hop edges and survive the top_k
+        truncation. No LLM call at retrieval time.
     """
 
     def __init__(self, config: Config) -> None:
