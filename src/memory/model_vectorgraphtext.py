@@ -29,6 +29,10 @@ class VectorGraphTextMemory(BaseMemory):
         super().__init__(config)
         self._max_hops: int = config.graph.max_hops
         self._top_k: int = config.graph.top_k
+        # Bound the retrieved subgraph with the same candidate cap as the other graph
+        # variants; without it VectorContextRetriever silently defaults to limit=30,
+        # a much tighter (and inconsistent) neighbourhood than graph/vectorgraph pull.
+        self._max_candidates: int = config.graph.max_candidates
         self._reranker = CrossEncoderReranker(config)
 
     def search(self, query: str) -> list[str]:
@@ -46,6 +50,9 @@ class VectorGraphTextMemory(BaseMemory):
             # Traverse to the same radius as the other graph variants
             # (config.graph.max_hops) so all pull comparable neighborhoods.
             path_depth=self._max_hops,
+            # Match the graph variants' candidate bound instead of the silent
+            # LlamaIndex default of 30 (see __init__).
+            limit=self._max_candidates,
         )
         nodes = retriever.retrieve(query)
         candidates = [c for n in nodes if (c := n.get_content().strip())]

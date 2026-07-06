@@ -4,6 +4,7 @@ from .model_graph import GraphMemory
 from .model_vector import VectorMemory
 from .model_vectorgraph import VectorGraphMemory
 from .model_vectorgraphtext import VectorGraphTextMemory
+from .model_vectorrerank import VectorRerankMemory
 
 __all__ = [
     "BaseMemory",
@@ -11,6 +12,7 @@ __all__ = [
     "BM25Memory",
     "GraphMemory",
     "VectorMemory",
+    "VectorRerankMemory",
     "VectorGraphMemory",
     "VectorGraphTextMemory",
 ]

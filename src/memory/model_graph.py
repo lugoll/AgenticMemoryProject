@@ -25,14 +25,11 @@ class GraphMemory(BaseMemory):
          index is kept in memory (built over entity names fetched from Neo4j)
          so tokenisation and scoring stay identical to the pre-migration
          NetworkX implementation.
-      2. Global hop-by-hop BFS (BaseMemory._expand_triples) — the frontier
-         starts as all seeds and each hop is one batched Cypher query, so
-         1-hop edges are emitted before 2-hop edges and survive the top_k
-         truncation. Hub explosion is bounded by graph.max_frontier /
-         graph.max_candidates (cap hits are logged).
-      3. Cross-encoder reranking (shared CrossEncoderReranker) — candidates
-         are scored against the query before truncation. No LLM call at
-         retrieval time.
+      2. Global hop-by-hop BFS (BaseMemory._expand_triples) followed by a flat
+         single-triple cross-encoder rerank — the frontier starts as all seeds
+         and each hop is one batched Cypher query. The eval settled on this over
+         chain-ranking, which regressed the graph variant's precise BM25 seeds.
+         No LLM call at retrieval time.
 
     The graph itself is written by the unified ingest (BaseMemory) via the
     LlamaIndex extractor with the shared predicate whitelist.

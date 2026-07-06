@@ -28,8 +28,12 @@ class CrossEncoderReranker:
         self._device: str = resolve_device(config.device)
         self._model = None  # lazy CrossEncoder
 
-    def rerank(self, query: str, candidates: list[str]) -> list[str]:
-        """Return the top_n candidates ranked by cross-encoder relevance to query."""
+    def score(self, query: str, candidates: list[str]) -> list[float]:
+        """Cross-encoder relevance of each candidate to the query (no truncation).
+
+        Used by the beam traversal, which needs raw per-chain scores to prune its
+        frontier; ``rerank`` layers sort+truncate on top.
+        """
         if not candidates:
             return []
         if self._model is None:
@@ -39,6 +43,10 @@ class CrossEncoderReranker:
                 "CrossEncoderReranker: loading %s on %s", self._model_name, self._device
             )
             self._model = CrossEncoder(self._model_name, device=self._device)
-        scores = self._model.predict([(query, c) for c in candidates])
+        return [float(s) for s in self._model.predict([(query, c) for c in candidates])]
+
+    def rerank(self, query: str, candidates: list[str]) -> list[str]:
+        """Return the top_n candidates ranked by cross-encoder relevance to query."""
+        scores = self.score(query, candidates)
         ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
         return [c for c, _ in ranked[: self._top_n]]

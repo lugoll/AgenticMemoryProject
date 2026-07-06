@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 
 from src.config.cfg import Config, resolve_device
 from .extraction import _SYSTEM_PROMPT, TRIPLE_SCHEMA, parse_triples
+from .traversal import _BeamConfig, _beam_search
 
 logger = logging.getLogger(__name__)
 
@@ -279,20 +280,21 @@ class BaseMemory(ABC):
         return self.__class__.__name__.lower()
 
     def _expand_triples(self, seed_nodes: list[str]) -> tuple[list[str], dict]:
-        """Global hop-by-hop BFS over the ``:__Entity__`` subgraph.
+        """Global hop-by-hop BFS over the ``:__Entity__`` subgraph (graph variant).
 
-        Shared by the graph variants: the frontier starts as *all* seed
-        entities and each hop is one batched Cypher query (``max_hops`` queries
-        total), so 1-hop edges are emitted before 2- and 3-hop edges and
-        survive downstream truncation.
+        The frontier starts as *all* seed entities and each hop is one batched Cypher
+        query (``max_hops`` queries total), so 1-hop edges are emitted before 2- and
+        3-hop edges and survive downstream truncation. Returns a flat list of single
+        triples for the caller to rerank — the configuration the eval settled on as
+        best for the graph variant's precise BM25 seeds (chain-ranking regressed it).
 
-        Hub explosion is bounded by ``graph.max_frontier`` (entities per hop)
-        and ``graph.max_candidates`` (total triples); every cap hit is logged
-        as a warning so truncated retrievals are visible in the logs.
+        Hub explosion is bounded by ``graph.max_frontier`` (entities per hop) and
+        ``graph.max_candidates`` (total triples); every cap hit is logged as a warning
+        so truncated retrievals are visible in the logs.
 
         Returns:
-            (triple strings "s p o", stats dict with cypher_queries /
-            candidates / caps_hit for retrieval-overhead telemetry).
+            (triple strings "s p o", stats dict with cypher_queries / candidates /
+            caps_hit for retrieval-overhead telemetry).
         """
         g = self._config.graph
         seen_edges: set[tuple[str, str, str]] = set()
@@ -329,9 +331,8 @@ class BaseMemory(ABC):
                 s, p, o = row["s"], row["p"], row["o"]
                 if s is None or o is None:
                     continue
-                # Predicates are stored verbatim as relationship types
-                # (snake_case); .lower() is a safety net in case a future
-                # store version normalises the casing.
+                # Predicates are stored verbatim as relationship types (snake_case);
+                # .lower() is a safety net in case a future store version normalises it.
                 p = (p or "related_to").lower()
                 key = (s, p, o)
                 if key not in seen_edges:
@@ -362,6 +363,42 @@ class BaseMemory(ABC):
             "caps_hit": caps_hit,
         }
         return results, stats
+
+    def _expand_beam(self, query: str, seed_nodes: list[str], reranker) -> tuple[list[str], dict]:
+        """Beam-guided, chain-scored traversal of the ``:__Entity__`` subgraph (vectorgraph).
+
+        Thin I/O wrapper: binds ``self._cypher`` and the reranker to the pure
+        ``_beam_search`` algorithm (``src/memory/traversal.py``), which grows reasoning
+        chains outward from the seeds, scores whole chains, keeps a per-node-capped
+        top-K beam, and returns the deduplicated triples of the top chains. Used by the
+        vectorgraph variant, whose noisy chunk-anchored seeds benefit from the caps;
+        the graph variant uses the simpler flat ``_expand_triples`` + single-triple rerank.
+
+        Returns:
+            (deduplicated triples of the top-ranked chains, stats dict with
+            cypher/scoring timings and counts for retrieval-overhead telemetry).
+        """
+        g = self._config.graph
+        beam_cfg = _BeamConfig(
+            max_hops=g.max_hops,
+            beam_width=g.beam_width,
+            max_per_tail=g.max_per_tail,
+            rerank_top_n=g.rerank_top_n,
+        )
+
+        def fetch_edges(tails: list[str]):
+            return self._cypher(
+                "MATCH (n:__Entity__)-[r]-(m:__Entity__) "
+                "WHERE n.name IN $frontier "
+                "RETURN DISTINCT n.name AS anchor, startNode(r).name AS s, "
+                "type(r) AS p, endNode(r).name AS o, m.name AS neighbor "
+                "ORDER BY s, p, o LIMIT $row_limit",
+                frontier=tails,
+                # Per-hop DB safety bound (a beam tail may be a hub).
+                row_limit=g.max_candidates,
+            )
+
+        return _beam_search(query, seed_nodes, beam_cfg, fetch_edges, reranker.score)
 
     # ── Phase A: unified ingest ───────────────────────────────────────────────
 
@@ -550,8 +587,8 @@ class UnifiedMemoryStore(BaseMemory):
     def search(self, query: str) -> list[str]:  # pragma: no cover - not a retrieval view
         raise NotImplementedError(
             "UnifiedMemoryStore is ingest-only; instantiate a retrieval view "
-            "(BM25Memory, VectorMemory, GraphMemory, VectorGraphMemory, "
-            "VectorGraphTextMemory) to search."
+            "(BM25Memory, VectorMemory, VectorRerankMemory, GraphMemory, "
+            "VectorGraphMemory, VectorGraphTextMemory) to search."
         )
 
     def get_backend_name(self) -> str:

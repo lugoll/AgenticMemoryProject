@@ -43,6 +43,8 @@ embedding:
 retrieval:
   top_k: 5
   similarity_cutoff: 0.5    # 0.5 statt 0.7: Multi-Hop braucht breiteres Netz
+  rerank_fetch_k: 30        # vectorrerank: Kandidaten-Pool vor Cross-Encoder-Rerank
+                            # (auf graph.rerank_top_n gekürzt); muss > rerank_top_n sein
 
 ingestion:
   chunk_size: 300            # HotpotQA-Paragraphen sind kurz (~100 Wörter)
@@ -52,16 +54,20 @@ graph:
   max_hops: 3                # HotpotQA braucht bis zu 3 Hops
   top_k: 10                  # Graph-Triples sind kurz (~8 Wörter) vs. Textpassagen (~50 Wörter)
                              # bei top_k=5 fehlt Hop 2 fast immer im Context
-  # Sicherheits-Caps gegen Hub-Explosion bei der BFS-Expansion. Ohne Caps kann
-  # ein Hub-Knoten tausende Kandidaten erzeugen, die der Reranker alle scoren
-  # muss. Jeder Cap-Treffer wird als Warning geloggt.
-  max_frontier: 200          # max. Entities pro Hop-Frontier
-  max_candidates: 1000       # max. Kandidaten-Triples vor dem Reranking
+  # Zwei Retrieval-Pfade teilen sich den Store (per Variante als bestes evaluiert):
+  #   graph       → flache Hop-für-Hop-BFS (_expand_triples) + Single-Triple-Rerank.
+  #                 Hub-Explosion begrenzt durch max_frontier (Entities/Hop) und
+  #                 max_candidates (Gesamt-Triples); Cap-Treffer werden geloggt.
+  #   vectorgraph → Beam-Pfad-Traversierung (traversal.py): Chains werden ganz
+  #                 gescored, ein per-Node-gedeckelter Top-K-Beam behalten.
+  max_frontier: 200          # graph: max. Entities pro Hop-Frontier
+  max_candidates: 1000       # max. Kandidaten-Triples / per-Hop Cypher-Row-Bound
+  beam_width: 10             # vectorgraph: Chains pro Hop
+  max_per_tail: 3            # vectorgraph: max. Chains pro Hop je Tail-/Source-Knoten
   # Cross-Encoder-Reranker, geteilt von allen Graph-Varianten (src/memory/reranker.py).
   # Kein LLM-Call → bewahrt die Zero-Cost-Retrieval-Eigenschaft (Gerät siehe `device`).
-  # Ersetzt die reine BFS-/Similarity-Reihenfolge durch Query-Relevanz vor der Truncation.
   rerank_model: "BAAI/bge-reranker-base"
-  rerank_top_n: 10           # finale Context-Größe nach dem Reranking (Default = top_k)
+  rerank_top_n: 10           # finale Context-Größe (Anzahl Reasoning-Chains)
 
 # Neo4j ist der einzige Store: Chunks (Volltext- + Vektor-Index) und der
 # extrahierte Knowledge Graph liegen in derselben Datenbank — ein Ingest-Lauf

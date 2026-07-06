@@ -23,9 +23,10 @@ class VectorGraphMemory(BaseMemory):
       1. Embed the query with the shared embedder and match it against the
          ``chunk_vector`` index (the same signal Vector RAG retrieves with).
       2. Hop ``(:Chunk)-[:MENTIONS]->(:__Entity__)`` to collect seed entities.
-      3. Expand triples via the shared hop-by-hop BFS
-         (BaseMemory._expand_triples, same max_hops/caps as GraphMemory).
-      4. Cross-encoder rerank (shared CrossEncoderReranker) before truncation.
+      3. Grow reasoning chains via the shared beam traversal
+         (BaseMemory._expand_beam): whole chains are scored and a per-node-capped
+         top-K beam is kept; the top chains' triples are returned. The eval settled
+         on the beam for vectorgraph's noisy chunk-anchored seeds.
 
     No LLM call at retrieval time.
     """
@@ -69,11 +70,8 @@ class VectorGraphMemory(BaseMemory):
             logger.debug("VectorGraphMemory: query=%r → no seed entities", query)
             return []
 
-        results, stats = self._expand_triples(seed_nodes)
-        t_expand = time.perf_counter()
-
-        reranked = self._reranker.rerank(query, results)
-        t_rerank = time.perf_counter()
+        # Beam traversal scores whole chains (no separate final rerank).
+        chains, stats = self._expand_beam(query, seed_nodes, self._reranker)
 
         record_retrieval_event(
             "chunk_seed", self.get_backend_name(),
@@ -81,19 +79,19 @@ class VectorGraphMemory(BaseMemory):
         )
         record_retrieval_event(
             "graph_bfs", self.get_backend_name(),
-            duration_ms=(t_expand - t_seed) * 1000,
-            seeds=len(seed_nodes), **stats,
+            duration_ms=stats["bfs_ms"], seeds=len(seed_nodes),
+            cypher_queries=stats["cypher_queries"], paths_scored=stats["paths_scored"],
         )
         record_retrieval_event(
             "rerank", self.get_backend_name(),
-            duration_ms=(t_rerank - t_expand) * 1000,
-            candidates=len(results), returned=len(reranked),
+            duration_ms=stats["rerank_ms"],
+            candidates=stats["paths_scored"], returned=stats["paths_kept"],
         )
         logger.debug(
-            "VectorGraphMemory: query=%r → %d seeds → %d candidates → rerank top %d",
-            query, len(seed_nodes), len(results), len(reranked),
+            "VectorGraphMemory: query=%r → %d seeds → %d paths scored → %d chains",
+            query, len(seed_nodes), stats["paths_scored"], stats["paths_kept"],
         )
-        return reranked
+        return chains
 
     def get_backend_name(self) -> str:
         return "vectorgraph"

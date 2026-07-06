@@ -4,12 +4,13 @@ Phase 3 — Experiment ausführen: N Fragen durch eine Variante jagen.
 Aufruf:
     uv run python scripts/03_run.py --variant bm25            --n 100
     uv run python scripts/03_run.py --variant vector          --n 100
+    uv run python scripts/03_run.py --variant vectorrerank     --n 100
     uv run python scripts/03_run.py --variant graph           --n 100
     uv run python scripts/03_run.py --variant vectorgraph     --n 100
     uv run python scripts/03_run.py --variant vectorgraphtext --n 100
 
 Ohne --variant werden alle Varianten nacheinander ausgeführt (bm25, vector,
-graph, vectorgraph, vectorgraphtext) — praktisch um die gesamte Pipeline mit
+vectorrerank, graph, vectorgraph, vectorgraphtext) — praktisch um die gesamte Pipeline mit
 && zu verketten:
     uv run python scripts/03_run.py --n 100
 
@@ -93,6 +94,9 @@ def build_memory(variant: str, cfg):
     elif variant == "vector":
         from src.memory.model_vector import VectorMemory
         return VectorMemory(config=cfg)
+    elif variant == "vectorrerank":
+        from src.memory.model_vectorrerank import VectorRerankMemory
+        return VectorRerankMemory(config=cfg)
     elif variant == "graph":
         from src.memory.model_graph import GraphMemory
         return GraphMemory(config=cfg)
@@ -138,7 +142,7 @@ def check_store_ready(variant: str, memory, cfg) -> None:
     )
 
 
-ALL_VARIANTS = ["bm25", "vector", "graph", "vectorgraph", "vectorgraphtext"]
+ALL_VARIANTS = ["bm25", "vector", "vectorrerank", "graph", "vectorgraph", "vectorgraphtext"]
 
 
 def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> None:

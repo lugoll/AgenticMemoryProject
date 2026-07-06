@@ -46,6 +46,11 @@ class EmbeddingCfg:
 class RetrievalCfg:
     top_k: int
     similarity_cutoff: float
+    # Candidate pool the reranking vector variant (VectorRerankMemory) over-fetches
+    # from the chunk vector index before the cross-encoder truncates to
+    # graph.rerank_top_n. Must exceed rerank_top_n or the rerank stage is a no-op.
+    # Plain VectorMemory ignores this and returns top_k directly.
+    rerank_fetch_k: int = 30
 
 
 @dataclass
@@ -58,10 +63,16 @@ class IngestionCfg:
 class GraphCfg:
     max_hops: int
     top_k: int = 10          # Override retrieval.top_k — triples are short, need more context
-    # Safety caps against hub explosion during BFS expansion; every cap hit
-    # is logged as a warning so truncated retrievals are visible in the logs.
-    max_frontier: int = 200      # max entities per hop frontier
-    max_candidates: int = 1000   # max candidate triples before reranking
+    # Two retrieval paths share this store (eval-selected best per variant):
+    #   graph       → flat hop-by-hop BFS (_expand_triples) + single-triple rerank.
+    #                 Hub explosion bounded by max_frontier (entities/hop) and
+    #                 max_candidates (total triples); cap hits are logged.
+    #   vectorgraph → beam path traversal (traversal.py): chains scored whole, a
+    #                 per-node-capped top-K beam kept (beam_width / max_per_tail).
+    max_frontier: int = 200      # graph: max entities per hop frontier
+    max_candidates: int = 1000   # max candidate triples / per-hop Cypher row bound
+    beam_width: int = 10         # vectorgraph: chains kept per hop
+    max_per_tail: int = 3        # vectorgraph: max chains sharing one tail/source node per hop
     # Cross-encoder reranker shared by all graph variants (src/memory/reranker.py).
     # No LLM call → preserves the zero-cost-retrieval property (device: see Config.device).
     rerank_model: str = "BAAI/bge-reranker-base"
