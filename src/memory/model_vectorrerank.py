@@ -18,7 +18,7 @@ class VectorRerankMemory(BaseMemory):
     Same native Neo4j chunk vector index and local query embedding as
     ``VectorMemory``, but over-fetches a larger candidate pool
     (``retrieval.rerank_fetch_k``) and reranks it with the shared
-    ``CrossEncoderReranker`` before truncating to ``graph.rerank_top_n``.
+    ``CrossEncoderReranker`` before truncating to ``retrieval.top_k``.
 
     Exists to isolate the effect of reranking: it puts pure Vector RAG through
     the *identical* ranking stage the graph variants use (same cross-encoder,

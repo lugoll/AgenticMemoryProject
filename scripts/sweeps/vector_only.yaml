@@ -1,0 +1,9 @@
+# Nachtrag zum top_k-Sweep — nur die vector-Variante, gleiche top_k-Achse wie
+# vectorrerank. Liest aus demselben 1000-Frage-Neo4j-Store (kein Re-Ingest);
+# die Ergebnisse werden nachträglich in den Haupt-Sweep gemerged und ersetzen
+# dort vectorrerank.
+n: 1000
+
+variants:
+  vector:
+    top_k: [3, 5, 10, 15]

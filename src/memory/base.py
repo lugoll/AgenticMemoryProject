@@ -279,7 +279,7 @@ class BaseMemory(ABC):
         """Returns the string identifier for this backend. Used for telemetry tagging."""
         return self.__class__.__name__.lower()
 
-    def _expand_triples(self, seed_nodes: list[str]) -> tuple[list[str], dict]:
+    def _expand_triples(self, seed_nodes: list[str]) -> tuple[list[str], set[str], dict]:
         """Global hop-by-hop BFS over the ``:__Entity__`` subgraph (graph variant).
 
         The frontier starts as *all* seed entities and each hop is one batched Cypher
@@ -293,7 +293,9 @@ class BaseMemory(ABC):
         so truncated retrievals are visible in the logs.
 
         Returns:
-            (triple strings "s p o", stats dict with cypher_queries / candidates /
+            (triple strings "s p o", visited entity names — seeds plus every entity
+            reached within max_hops, consumed by the *text variants'
+            ``_collect_chunks`` — and a stats dict with cypher_queries / candidates /
             caps_hit for retrieval-overhead telemetry).
         """
         g = self._config.graph
@@ -362,7 +364,31 @@ class BaseMemory(ABC):
             "candidates": len(results),
             "caps_hit": caps_hit,
         }
-        return results, stats
+        return results, visited, stats
+
+    def _collect_chunks(self, entities: set[str]) -> list[str]:
+        """Source chunks mentioning the given (traversed) entities, best first.
+
+        Shared by the text variants (graphtext / vectorgraphtext): after the BFS has
+        produced a visited-entity set, this pulls the chunk passages those entities
+        were extracted from. Ranked by a mention-overlap prior (chunks mentioning
+        more traversed entities first — multi-hop bridge passages score highest) and
+        capped at ``retrieval.rerank_fetch_k`` so a 3-hop entity explosion cannot
+        flood the cross-encoder (latency guard; the reranker does the final cut).
+        """
+        if not entities:
+            return []
+        rows = self._cypher(
+            "MATCH (c:Chunk)-[:MENTIONS]->(e:__Entity__) "
+            "WHERE e.name IN $entities "
+            "WITH c, count(DISTINCT e) AS overlap "
+            "ORDER BY overlap DESC "
+            "LIMIT $fetch_k "
+            "RETURN c.text AS text",
+            entities=sorted(entities),
+            fetch_k=self._config.retrieval.rerank_fetch_k,
+        )
+        return [r["text"] for r in rows if r["text"] and r["text"].strip()]
 
     def _expand_beam(self, query: str, seed_nodes: list[str], reranker) -> tuple[list[str], dict]:
         """Beam-guided, chain-scored traversal of the ``:__Entity__`` subgraph (vectorgraph).
@@ -383,7 +409,9 @@ class BaseMemory(ABC):
             max_hops=g.max_hops,
             beam_width=g.beam_width,
             max_per_tail=g.max_per_tail,
-            rerank_top_n=g.rerank_top_n,
+            # Final beam size = the shared final-context knob (retrieval.top_k),
+            # so vectorgraph returns the same item count as every other variant.
+            rerank_top_n=self._config.retrieval.top_k,
         )
 
         def fetch_edges(tails: list[str]):
@@ -588,7 +616,7 @@ class UnifiedMemoryStore(BaseMemory):
         raise NotImplementedError(
             "UnifiedMemoryStore is ingest-only; instantiate a retrieval view "
             "(BM25Memory, VectorMemory, VectorRerankMemory, GraphMemory, "
-            "VectorGraphMemory, VectorGraphTextMemory) to search."
+            "GraphTextMemory, VectorGraphMemory, VectorGraphTextMemory) to search."
         )
 
     def get_backend_name(self) -> str:

@@ -11,7 +11,9 @@ class CrossEncoderReranker:
     """Cross-encoder reranking shared by every retrieval variant.
 
     Scores (query, candidate) pairs jointly with a sentence-transformers
-    CrossEncoder and keeps the ``graph.rerank_top_n`` most relevant candidates.
+    CrossEncoder and keeps the ``retrieval.top_k`` most relevant candidates
+    — the single final-context-size knob shared by every variant, so the
+    number of injected context items is identical across the comparison.
     No LLM call and zero tokens → preserves the zero-cost-retrieval property;
     the wall-clock cost is reported by the callers via retrieval_overhead
     telemetry events.
@@ -24,7 +26,7 @@ class CrossEncoderReranker:
 
     def __init__(self, config: Config) -> None:
         self._model_name: str = config.graph.rerank_model
-        self._top_n: int = config.graph.rerank_top_n
+        self._top_n: int = config.retrieval.top_k
         self._device: str = resolve_device(config.device)
         self._model = None  # lazy CrossEncoder
 

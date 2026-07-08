@@ -38,9 +38,8 @@ class GraphMemory(BaseMemory):
     def __init__(self, config: Config) -> None:
         super().__init__(config)
         self._max_hops: int = config.graph.max_hops
-        # Graph uses its own top_k (graph.top_k) because triples are ~8 words
-        # vs. text passages (~50 words). Needs more results to cover 2-hop paths.
-        self._top_k: int = config.graph.top_k
+        # Final context size is retrieval.top_k, applied by the shared
+        # CrossEncoderReranker below (identical across all variants).
         self._bm25: BM25Okapi | None = None
         self._node_list: list[str] = []
         self._reranker = CrossEncoderReranker(config)
@@ -74,31 +73,35 @@ class GraphMemory(BaseMemory):
         corpus = [self._tokenize(n) for n in self._node_list]
         self._bm25 = BM25Okapi(corpus) if corpus else None
 
+    def _bm25_seeds(self, query: str) -> list[str]:
+        """Map query tokens to the ``graph.seed_top_k`` best-matching entity names.
+
+        Shared entry point for the triples variant (graph) and the chunk-text
+        variant (graphtext) — both seed the BFS identically.
+        """
+        if self._bm25 is None:
+            self._build_node_index()
+        if not self._node_list:
+            return []
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+        scores = self._bm25.get_scores(query_tokens)
+        top_indices = scores.argsort()[::-1][: self._config.graph.seed_top_k]
+        return [self._node_list[i] for i in top_indices if scores[i] > 0]
+
     # ── Retrieval ─────────────────────────────────────────────────────────────
 
     def search(self, query: str) -> list[str]:
         if not query.strip():
             return []
 
-        if self._bm25 is None:
-            self._build_node_index()
-
-        if not self._node_list:
-            return []
-
-        query_tokens = self._tokenize(query)
-        if not query_tokens:
-            return []
-
         t0 = time.perf_counter()
-        scores = self._bm25.get_scores(query_tokens)
-        top_indices = scores.argsort()[::-1][:10]
-        seed_nodes = [self._node_list[i] for i in top_indices if scores[i] > 0]
-
+        seed_nodes = self._bm25_seeds(query)
         if not seed_nodes:
             return []
 
-        results, stats = self._expand_triples(seed_nodes)
+        results, _visited, stats = self._expand_triples(seed_nodes)
         t_expand = time.perf_counter()
 
         reranked = self._reranker.rerank(query, results)

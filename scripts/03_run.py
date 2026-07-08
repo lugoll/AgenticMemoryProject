@@ -6,12 +6,13 @@ Aufruf:
     uv run python scripts/03_run.py --variant vector          --n 100
     uv run python scripts/03_run.py --variant vectorrerank     --n 100
     uv run python scripts/03_run.py --variant graph           --n 100
+    uv run python scripts/03_run.py --variant graphtext       --n 100
     uv run python scripts/03_run.py --variant vectorgraph     --n 100
     uv run python scripts/03_run.py --variant vectorgraphtext --n 100
 
 Ohne --variant werden alle Varianten nacheinander ausgeführt (bm25, vector,
-vectorrerank, graph, vectorgraph, vectorgraphtext) — praktisch um die gesamte Pipeline mit
-&& zu verketten:
+vectorrerank, graph, graphtext, vectorgraph, vectorgraphtext) — praktisch um die
+gesamte Pipeline mit && zu verketten:
     uv run python scripts/03_run.py --n 100
 
 Voraussetzung: der Unified Ingest (02_setup.py) wurde einmal ausgeführt —
@@ -100,6 +101,9 @@ def build_memory(variant: str, cfg):
     elif variant == "graph":
         from src.memory.model_graph import GraphMemory
         return GraphMemory(config=cfg)
+    elif variant == "graphtext":
+        from src.memory.model_graphtext import GraphTextMemory
+        return GraphTextMemory(config=cfg)
     elif variant == "vectorgraph":
         from src.memory.model_vectorgraph import VectorGraphMemory
         return VectorGraphMemory(config=cfg)
@@ -130,7 +134,7 @@ def check_store_ready(variant: str, memory, cfg) -> None:
             f"\n[FEHLER] Unified Store ist leer (0 Chunks in Neo4j)\n" + hint
         )
 
-    if variant in ("graph", "vectorgraph", "vectorgraphtext") and memory.edge_count == 0:
+    if variant in ("graph", "graphtext", "vectorgraph", "vectorgraphtext") and memory.edge_count == 0:
         raise SystemExit(
             f"\n[FEHLER] Knowledge Graph ist leer (0 Kanten in Neo4j)\n"
             f"         Chunks vorhanden ({chunks}), aber keine extrahierten Triples.\n" + hint
@@ -142,7 +146,63 @@ def check_store_ready(variant: str, memory, cfg) -> None:
     )
 
 
-ALL_VARIANTS = ["bm25", "vector", "vectorrerank", "graph", "vectorgraph", "vectorgraphtext"]
+ALL_VARIANTS = ["bm25", "vector", "vectorrerank", "graph", "graphtext", "vectorgraph", "vectorgraphtext"]
+
+
+def run_questions(
+    variant: str,
+    questions: list[dict],
+    cfg,
+    memory,
+    results_path: Path,
+) -> None:
+    """Läuft die N Fragen durch eine bereits gebaute Memory und schreibt results.jsonl.
+
+    Reiner Frage-Loop ohne Container- oder Tracker-Verwaltung — geteilt von der
+    03-CLI (run_variant) und dem Sweep-Orchestrator (05_sweep.py), damit beide
+    identisches Record-Format und identische Telemetrie-Bindung nutzen. Der
+    Aufrufer ist dafür verantwortlich, Container zu starten, den Tracker zu
+    registrieren und die Memory via build_memory zu erstellen.
+    """
+    with results_path.open("w", encoding="utf-8") as out:
+        for i, q in enumerate(questions):
+            run_id = uuid.uuid4().hex[:8]
+            # Bind retrieval_overhead telemetry events to this question.
+            set_run_context(run_id)
+            t_total = time.perf_counter()
+
+            context = memory.search(q["question"])
+            result = answer_question(
+                question=q["question"],
+                context=context,
+                cfg_agent=cfg.llm.agent,
+                variant=variant,
+                run_id=run_id,
+            )
+
+            total_latency_ms = round((time.perf_counter() - t_total) * 1000, 2)
+
+            record = {
+                "run_id":            run_id,
+                "variant":           variant,
+                "question":          q["question"],
+                "expected":          q["answer"],
+                "answer":            result.answer,
+                "type":              q.get("type", "unknown"),
+                "context":           context,
+                "latency_ms":        total_latency_ms,
+                "tokens_prompt":     result.tokens_prompt,
+                "tokens_completion": result.tokens_completion,
+                "ts":                datetime.now(timezone.utc).isoformat(),
+            }
+            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out.flush()
+
+            if (i + 1) % 10 == 0 or i == 0:
+                print(
+                    f"  [{i+1:3d}/{len(questions)}]  {total_latency_ms:6.0f}ms  "
+                    f"ctx={len(context)}  answer={result.answer[:60]!r}"
+                )
 
 
 def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> None:
@@ -163,45 +223,7 @@ def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> N
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         results_path = output_dir / f"{variant}_{ts}_results.jsonl"
 
-        with results_path.open("w", encoding="utf-8") as out:
-            for i, q in enumerate(questions):
-                run_id = uuid.uuid4().hex[:8]
-                # Bind retrieval_overhead telemetry events to this question.
-                set_run_context(run_id)
-                t_total = time.perf_counter()
-
-                context = memory.search(q["question"])
-                result = answer_question(
-                    question=q["question"],
-                    context=context,
-                    cfg_agent=cfg.llm.agent,
-                    variant=variant,
-                    run_id=run_id,
-                )
-
-                total_latency_ms = round((time.perf_counter() - t_total) * 1000, 2)
-
-                record = {
-                    "run_id":            run_id,
-                    "variant":           variant,
-                    "question":          q["question"],
-                    "expected":          q["answer"],
-                    "answer":            result.answer,
-                    "type":              q.get("type", "unknown"),
-                    "context":           context,
-                    "latency_ms":        total_latency_ms,
-                    "tokens_prompt":     result.tokens_prompt,
-                    "tokens_completion": result.tokens_completion,
-                    "ts":                datetime.now(timezone.utc).isoformat(),
-                }
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                out.flush()
-
-                if (i + 1) % 10 == 0 or i == 0:
-                    print(
-                        f"  [{i+1:3d}/{len(questions)}]  {total_latency_ms:6.0f}ms  "
-                        f"ctx={len(context)}  answer={result.answer[:60]!r}"
-                    )
+        run_questions(variant, questions, cfg, memory, results_path)
 
         print(f"\nErgebnisse -> {results_path}")
         print(f"Telemetry  -> {tracker.telemetry_path}")

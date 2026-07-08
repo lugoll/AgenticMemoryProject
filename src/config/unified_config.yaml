@@ -41,33 +41,55 @@ embedding:
   batch_size: 32
 
 retrieval:
+  # Einziger finaler Context-Size-Knopf für ALLE Varianten: Anzahl der
+  # zurückgegebenen Items (Passagen/Triples/Chains) nach der finalen Kürzung
+  # bzw. dem Cross-Encoder-Rerank. Über alle Varianten angeglichen, damit
+  # Token-Unterschiede die Item-Größe widerspiegeln (Triple vs. Passage),
+  # nicht eine Config-Asymmetrie.
   top_k: 5
-  similarity_cutoff: 0.5    # 0.5 statt 0.7: Multi-Hop braucht breiteres Netz
-  rerank_fetch_k: 30        # vectorrerank: Kandidaten-Pool vor Cross-Encoder-Rerank
-                            # (auf graph.rerank_top_n gekürzt); muss > rerank_top_n sein
+  similarity_cutoff: 0.4    # Sweep 2026-07-06: 0.4 > 0.5 für vectorrerank (+0.01 judge)
+                            # und vectorgraphtext (+0.015); breiteres Netz für Multi-Hop.
+  rerank_fetch_k: 60        # vectorrerank: Kandidaten-Pool vor Cross-Encoder-Rerank
+                            # (auf top_k gekürzt); muss > top_k sein. Sweep 2026-07-06:
+                            # 60 > 30 > 15 für alle drei Rerank-Varianten (mehr Recall
+                            # vor dem Rerank, ~0 Token-Kosten).
+  hop0_fetch_k: 5           # vectorgraphtext: Hop-0-Chunk-Vektor-Pool vor der Graph-
+                            # Expansion, entkoppelt von top_k. Sweep 2026-07-06: 5 (=top_k)
+                            # schlägt 20/40 deutlich (0.605 vs 0.565/0.555 judge) — die
+                            # Graph-Bridges tragen das Signal, mehr Cosine-Chunks = Rauschen.
 
 ingestion:
   chunk_size: 300            # HotpotQA-Paragraphen sind kurz (~100 Wörter)
   chunk_overlap: 50
 
 graph:
-  max_hops: 3                # HotpotQA braucht bis zu 3 Hops
-  top_k: 10                  # Graph-Triples sind kurz (~8 Wörter) vs. Textpassagen (~50 Wörter)
-                             # bei top_k=5 fehlt Hop 2 fast immer im Context
+  max_hops: 2                # Sweep 2026-07-06: 2 > 3 für graph & graphtext (Hop 3 fügt
+                             # Hub-Rauschen hinzu das den Rerank verschlechtert), vectorgraphtext
+                             # praktisch gleich (0.600 vs 0.605) — 2 gewinnt auch bei Latenz.
+  seed_top_k: 10             # BM25-Entity-Linking-Seeds für die BFS (graph + graphtext),
+                             # KEINE finale Context-Größe — die ist retrieval.top_k.
+                             # Sweep 2026-07-06: Kompromiss — graph peakt bei 20 (+0.01),
+                             # graphtext bricht bei 20 ein (0.53 vs 0.57 bei 10); 10 gewinnt netto.
   # Zwei Retrieval-Pfade teilen sich den Store (per Variante als bestes evaluiert):
   #   graph       → flache Hop-für-Hop-BFS (_expand_triples) + Single-Triple-Rerank.
   #                 Hub-Explosion begrenzt durch max_frontier (Entities/Hop) und
   #                 max_candidates (Gesamt-Triples); Cap-Treffer werden geloggt.
   #   vectorgraph → Beam-Pfad-Traversierung (traversal.py): Chains werden ganz
   #                 gescored, ein per-Node-gedeckelter Top-K-Beam behalten.
-  max_frontier: 200          # graph: max. Entities pro Hop-Frontier
-  max_candidates: 1000       # max. Kandidaten-Triples / per-Hop Cypher-Row-Bound
+  max_frontier: 200          # graph: max. Entities pro Hop-Frontier. Cap-Diagnose 2026-07-06:
+                             # 500 getestet, aber nur Verdünnung des 60-Slot-Chunk-Pools der
+                             # Text-Varianten (−1..2 Fragen, +130ms) ohne Upside → bei 200.
+  max_candidates: 1200       # max. Kandidaten-Triples / per-Hop Cypher-Row-Bound. Cap-Diagnose
+                             # 2026-07-06: unter dem getunten max_hops=2 sind die echten Pools
+                             # winzig (graph/graphtext max 1032, vgt max 386) — der alte 1000er
+                             # Cap klippte nur eine einzige graph-Query. 1200 = leichte Reserve
+                             # über dem 1032-Tail, sodass NIE truncated wird (~0 Kosten).
   beam_width: 10             # vectorgraph: Chains pro Hop
   max_per_tail: 3            # vectorgraph: max. Chains pro Hop je Tail-/Source-Knoten
   # Cross-Encoder-Reranker, geteilt von allen Graph-Varianten (src/memory/reranker.py).
   # Kein LLM-Call → bewahrt die Zero-Cost-Retrieval-Eigenschaft (Gerät siehe `device`).
+  # Finale Größe nach Rerank = retrieval.top_k (geteilter Knopf), kein Graph-Feld.
   rerank_model: "BAAI/bge-reranker-base"
-  rerank_top_n: 10           # finale Context-Größe (Anzahl Reasoning-Chains)
 
 # Neo4j ist der einzige Store: Chunks (Volltext- + Vektor-Index) und der
 # extrahierte Knowledge Graph liegen in derselben Datenbank — ein Ingest-Lauf

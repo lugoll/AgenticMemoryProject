@@ -1,0 +1,36 @@
+# Hyperparameter-Sweep-Grid (OHNE retrieval.top_k — das ist die separate
+# Visualisierungs-Achse und wird auf dem Base-Config-Wert festgehalten).
+#
+# Ein Block pro Variante listet NUR die für diese Variante relevanten Knöpfe.
+# 05_sweep.py bildet je Variante das kartesische Produkt der Listen. Jeder
+# Knopf-Wert wird per setattr auf cfg.retrieval bzw. cfg.graph angewandt —
+# reine Retrieval-Zeit-Parameter, kein Re-Ingest nötig.
+#
+# Feld → Ziel-Config:
+#   retrieval:  similarity_cutoff, rerank_fetch_k, hop0_fetch_k
+#   graph:      seed_top_k, max_hops, max_frontier, max_candidates
+
+n: 100                     # Fragen pro Grid-Punkt (über das ganze Grid konstant)
+
+variants:
+  vector:
+    similarity_cutoff: [0.4, 0.5, 0.6]
+
+  vectorrerank:
+    rerank_fetch_k: [15, 30, 60]
+    similarity_cutoff: [0.4, 0.5]
+
+  graph:
+    seed_top_k: [5, 10, 20]
+    max_hops: [2, 3]
+
+  graphtext:
+    seed_top_k: [5, 10, 20]
+    max_hops: [2, 3]
+    rerank_fetch_k: [15, 30, 60]
+
+  vectorgraphtext:
+    max_hops: [2, 3]
+    rerank_fetch_k: [15, 30, 60]
+    hop0_fetch_k: [5, 20, 40]
+    similarity_cutoff: [0.4, 0.5]
