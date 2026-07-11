@@ -4,14 +4,12 @@ Phase 3 — Experiment ausführen: N Fragen durch eine Variante jagen.
 Aufruf:
     uv run python scripts/03_run.py --variant bm25            --n 100
     uv run python scripts/03_run.py --variant vector          --n 100
-    uv run python scripts/03_run.py --variant vectorrerank     --n 100
     uv run python scripts/03_run.py --variant graph           --n 100
     uv run python scripts/03_run.py --variant graphtext       --n 100
     uv run python scripts/03_run.py --variant vectorgraph     --n 100
     uv run python scripts/03_run.py --variant vectorgraphtext --n 100
 
-Ohne --variant werden alle Varianten nacheinander ausgeführt (bm25, vector,
-vectorrerank, graph, graphtext, vectorgraph, vectorgraphtext) — praktisch um die
+Ohne --variant werden alle Varianten nacheinander ausgeführt (bm25, vector, graph, graphtext, vectorgraph, vectorgraphtext) — praktisch um die
 gesamte Pipeline mit && zu verketten:
     uv run python scripts/03_run.py --n 100
 
@@ -146,7 +144,12 @@ def check_store_ready(variant: str, memory, cfg) -> None:
     )
 
 
-ALL_VARIANTS = ["bm25", "vector", "vectorrerank", "graph", "graphtext", "vectorgraph", "vectorgraphtext"]
+# Default set run when --variant is omitted ("run all" path).
+ALL_VARIANTS = ["bm25", "vector", "graph", "graphtext", "vectorgraph", "vectorgraphtext"]
+# Opt-in-only variants: buildable/selectable via --variant, but excluded from the
+# default "run all" loop. `fullcontext` is the per-question oracle baseline (feeds each
+# question's own HotpotQA context straight to the LLM, no retrieval, no store).
+SELECTABLE_VARIANTS = ALL_VARIANTS + ["vectorrerank", "fullcontext"]
 
 
 def run_questions(
@@ -171,7 +174,12 @@ def run_questions(
             set_run_context(run_id)
             t_total = time.perf_counter()
 
-            context = memory.search(q["question"])
+            if variant == "fullcontext":
+                # Oracle baseline: skip retrieval entirely, feed the LLM this
+                # question's own HotpotQA context (memory is None here).
+                context = q.get("context", [])
+            else:
+                context = memory.search(q["question"])
             result = answer_question(
                 question=q["question"],
                 context=context,
@@ -207,7 +215,12 @@ def run_questions(
 
 def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> None:
     """Führt eine einzelne Variante aus (Container-Start/-Stop inklusive)."""
+    # fullcontext is the oracle baseline: no retrieval, no store — it reads each
+    # question's own context and only needs ollama-agent to answer.
+    is_full = variant == "fullcontext"
     containers = get_required_containers(variant)
+    if is_full:
+        containers = [c for c in containers if c != "neo4j"]
     if containers:
         print(f"Starting containers for {variant}...")
         ensure_containers_running(containers)
@@ -217,8 +230,9 @@ def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> N
 
         print(f"Variante: {variant}  |  Fragen: {len(questions)}")
 
-        memory = build_memory(variant, cfg)
-        check_store_ready(variant, memory, cfg)
+        memory = None if is_full else build_memory(variant, cfg)
+        if not is_full:
+            check_store_ready(variant, memory, cfg)
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         results_path = output_dir / f"{variant}_{ts}_results.jsonl"
@@ -237,9 +251,10 @@ def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> N
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RAG-Experiment ausführen")
-    parser.add_argument("--variant", choices=ALL_VARIANTS, default=None,
+    parser.add_argument("--variant", choices=SELECTABLE_VARIANTS, default=None,
                         help="Einzelne Variante. Ohne Angabe werden alle "
-                             "Varianten nacheinander ausgeführt.")
+                             "Default-Varianten nacheinander ausgeführt "
+                             "(vectorrerank und fullcontext sind opt-in).")
     parser.add_argument("--n",    type=int,  default=100, help="Anzahl Fragen (default: 100)")
     parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
     args = parser.parse_args()

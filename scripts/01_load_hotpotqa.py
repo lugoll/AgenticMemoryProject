@@ -58,6 +58,15 @@ def load_and_sample(n: int, seed: int) -> tuple[list[dict], list[str], list[dict
             "answer":   entry["answer"],
             "type":     entry["type"],
             "level":    entry["level"],
+            # Per-question oracle context: exactly the gold + distractor paragraphs
+            # HotpotQA attached to this question, built with the same join as the
+            # pooled `documents` above. Consumed by the fullcontext baseline variant.
+            "context":  [
+                title + ". " + " ".join(sentences)
+                for title, sentences in zip(
+                    entry["context"]["title"], entry["context"]["sentences"]
+                )
+            ],
         }
         for entry in selected
     ]

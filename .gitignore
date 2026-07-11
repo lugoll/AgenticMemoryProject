@@ -34,8 +34,7 @@ data/stores/*
 !data/stores/graph.checkpoint
 
 # Evaluation outputs — generated artifacts, not source
-evaluations/*
-!evaluations/.gitkeep
+evaluations/logs/*
 
 # Jupyter
 notebooks/.ipynb_checkpoints/

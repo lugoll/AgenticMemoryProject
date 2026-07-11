@@ -41,22 +41,13 @@ embedding:
   batch_size: 32
 
 retrieval:
-  # Einziger finaler Context-Size-Knopf für ALLE Varianten: Anzahl der
-  # zurückgegebenen Items (Passagen/Triples/Chains) nach der finalen Kürzung
-  # bzw. dem Cross-Encoder-Rerank. Über alle Varianten angeglichen, damit
-  # Token-Unterschiede die Item-Größe widerspiegeln (Triple vs. Passage),
-  # nicht eine Config-Asymmetrie.
-  top_k: 5
-  similarity_cutoff: 0.4    # Sweep 2026-07-06: 0.4 > 0.5 für vectorrerank (+0.01 judge)
-                            # und vectorgraphtext (+0.015); breiteres Netz für Multi-Hop.
-  rerank_fetch_k: 60        # vectorrerank: Kandidaten-Pool vor Cross-Encoder-Rerank
-                            # (auf top_k gekürzt); muss > top_k sein. Sweep 2026-07-06:
-                            # 60 > 30 > 15 für alle drei Rerank-Varianten (mehr Recall
-                            # vor dem Rerank, ~0 Token-Kosten).
-  hop0_fetch_k: 5           # vectorgraphtext: Hop-0-Chunk-Vektor-Pool vor der Graph-
-                            # Expansion, entkoppelt von top_k. Sweep 2026-07-06: 5 (=top_k)
-                            # schlägt 20/40 deutlich (0.605 vs 0.565/0.555 judge) — die
-                            # Graph-Bridges tragen das Signal, mehr Cosine-Chunks = Rauschen.
+  top_k: 3
+  similarity_cutoff: 0.7                       
+  rerank_fetch_k: 60
+  hop0_fetch_k: 5           
+                            
+                            
+                            
 
 ingestion:
   chunk_size: 300            # HotpotQA-Paragraphen sind kurz (~100 Wörter)
