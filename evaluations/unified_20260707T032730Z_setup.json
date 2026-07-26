@@ -1,0 +1,15 @@
+{
+  "variant": "unified",
+  "n_documents": 9654,
+  "n_chunks": 9694,
+  "n_entities": 60095,
+  "n_edges": 69758,
+  "ingest_time_s": 20114.38,
+  "chunk_embed_time_s": 0.02,
+  "graph_extract_time_s": 20105.02,
+  "ingest_tokens_prompt": 4413916,
+  "ingest_tokens_completion": 1888793,
+  "ingest_tokens_total": 6302709,
+  "llm_calls": 9694,
+  "created_at": "2026-07-07T03:27:30.947762+00:00"
+}

@@ -1,0 +1,142 @@
+[
+  {
+    "combo_id": "bm25_c00",
+    "variant": "bm25",
+    "params": {
+      "top_k": 3
+    }
+  },
+  {
+    "combo_id": "bm25_c01",
+    "variant": "bm25",
+    "params": {
+      "top_k": 5
+    }
+  },
+  {
+    "combo_id": "bm25_c02",
+    "variant": "bm25",
+    "params": {
+      "top_k": 10
+    }
+  },
+  {
+    "combo_id": "bm25_c03",
+    "variant": "bm25",
+    "params": {
+      "top_k": 15
+    }
+  },
+  {
+    "combo_id": "graph_c00",
+    "variant": "graph",
+    "params": {
+      "top_k": 3
+    }
+  },
+  {
+    "combo_id": "graph_c01",
+    "variant": "graph",
+    "params": {
+      "top_k": 5
+    }
+  },
+  {
+    "combo_id": "graph_c02",
+    "variant": "graph",
+    "params": {
+      "top_k": 10
+    }
+  },
+  {
+    "combo_id": "graph_c03",
+    "variant": "graph",
+    "params": {
+      "top_k": 15
+    }
+  },
+  {
+    "combo_id": "graphtext_c00",
+    "variant": "graphtext",
+    "params": {
+      "top_k": 3
+    }
+  },
+  {
+    "combo_id": "graphtext_c01",
+    "variant": "graphtext",
+    "params": {
+      "top_k": 5
+    }
+  },
+  {
+    "combo_id": "graphtext_c02",
+    "variant": "graphtext",
+    "params": {
+      "top_k": 10
+    }
+  },
+  {
+    "combo_id": "graphtext_c03",
+    "variant": "graphtext",
+    "params": {
+      "top_k": 15
+    }
+  },
+  {
+    "combo_id": "vectorgraphtext_c00",
+    "variant": "vectorgraphtext",
+    "params": {
+      "top_k": 3
+    }
+  },
+  {
+    "combo_id": "vectorgraphtext_c01",
+    "variant": "vectorgraphtext",
+    "params": {
+      "top_k": 5
+    }
+  },
+  {
+    "combo_id": "vectorgraphtext_c02",
+    "variant": "vectorgraphtext",
+    "params": {
+      "top_k": 10
+    }
+  },
+  {
+    "combo_id": "vectorgraphtext_c03",
+    "variant": "vectorgraphtext",
+    "params": {
+      "top_k": 15
+    }
+  },
+  {
+    "combo_id": "vector_c00",
+    "variant": "vector",
+    "params": {
+      "top_k": 3
+    }
+  },
+  {
+    "combo_id": "vector_c01",
+    "variant": "vector",
+    "params": {
+      "top_k": 5
+    }
+  },
+  {
+    "combo_id": "vector_c02",
+    "variant": "vector",
+    "params": {
+      "top_k": 10
+    }
+  },
+  {
+    "combo_id": "vector_c03",
+    "variant": "vector",
+    "params": {
+      "top_k": 15
+    }
+  }
+]

@@ -1,0 +1,32 @@
+# top_k-Sweep — findet das beste retrieval.top_k je Variante.
+#
+# ANDERS als default.yaml: hier ist retrieval.top_k DER gefegte Knopf. Alle
+# übrigen Parameter (similarity_cutoff, rerank_fetch_k, hop0_fetch_k, max_hops,
+# seed_top_k, …) bleiben auf ihren im unified_config.yaml getunten Best-Werten
+# (Sweep 2026-07-06) — so isoliert dieser Lauf ausschließlich den top_k-Effekt.
+#
+# top_k = finale Context-Größe für ALLE Varianten (Passagen/Triples/Chains nach
+# der finalen Kürzung bzw. dem Cross-Encoder-Rerank). 05_sweep.py wendet den
+# Wert per setattr auf cfg.retrieval an — reiner Retrieval-Zeit-Parameter,
+# KEIN Re-Ingest nötig (der teilt sich den einen Neo4j-Store).
+#
+# Varianten: vector und vectorgraph bewusst ausgelassen.
+# 5 Varianten × 4 top_k = 20 Grid-Punkte × 1000 Fragen.
+
+n: 1000                    # Fragen pro Grid-Punkt
+
+variants:
+  bm25:
+    top_k: [3, 5, 10, 15]
+
+  vectorrerank:
+    top_k: [3, 5, 10, 15]
+
+  graph:
+    top_k: [3, 5, 10, 15]
+
+  graphtext:
+    top_k: [3, 5, 10, 15]
+
+  vectorgraphtext:
+    top_k: [3, 5, 10, 15]

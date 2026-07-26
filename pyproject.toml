@@ -7,13 +7,16 @@ requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0,<7",
     "litellm>=1.82,<2",
-    "networkx>=3.0",
     "numpy>=2.0",
     "datasets>=3.0,<4",
-    "chromadb-client>=1.0",
     "sentence-transformers>=3.0",
     "rank-bm25>=0.2.2",
     "python-dotenv>=1.2.2",
+    "llama-index-core>=0.12,<1",
+    "llama-index-graph-stores-neo4j>=0.4,<1",
+    "llama-index-llms-litellm>=0.3,<1",
+    "llama-index-embeddings-huggingface>=0.4,<1",
+    "neo4j>=5.19,<6",
 ]
 
 [build-system]
@@ -36,6 +39,9 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.11.0",
+    "pandas>=2.3.3",
     "pytest>=8.3,<9",
     "pytest-cov>=5.0.0",
 ]

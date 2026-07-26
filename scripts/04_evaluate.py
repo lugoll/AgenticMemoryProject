@@ -114,6 +114,11 @@ def _read_jsonl(path: Path) -> list[dict]:
 def _latest_setup(output_dir: Path, variant: str) -> dict | None:
     files = sorted(output_dir.glob(f"{variant}_*_setup.json"))
     if not files:
+        # Seit dem Unified Ingest gibt es nur noch einen Setup-Lauf für alle
+        # Varianten; Kosten-Attribution pro Variante über die dort erfassten
+        # Teil-Zeiten (chunk_embed_time_s vs. graph_extract_time_s).
+        files = sorted(output_dir.glob("unified_*_setup.json"))
+    if not files:
         return None
     return json.loads(files[-1].read_text(encoding="utf-8"))
 

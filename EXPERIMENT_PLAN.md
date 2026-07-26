@@ -7,6 +7,30 @@
 
 ---
 
+> ## ⚠️ Update 2026-07: Migration auf den Unified Neo4j Store
+>
+> Die Store-Architektur unten beschreibt den historischen Stand (SQLite FTS5,
+> ChromaDB, NetworkX-JSON). Seitdem wurde auf **einen gemeinsamen Neo4j-Store**
+> für alle Varianten migriert (siehe README):
+>
+> - **Ein Ingest-Lauf** (`02_setup.py`, ohne `--variant`) schreibt Chunks
+>   (embedded, volltext- und vektor-indiziert) und den per LlamaIndex
+>   extrahierten Knowledge Graph in dieselbe Neo4j-Datenbank. Alle Varianten
+>   operieren dadurch auf identischen Daten (interne Validität) und der teure
+>   LLM-Ingest läuft genau einmal.
+> - **Varianten sind reine Retrieval-Views**: `bm25` (Lucene-Volltext statt
+>   SQLite FTS5), `vector` (Neo4j-Vektorindex statt ChromaDB; Score-Semantik
+>   identisch `(1+cos)/2`), `graph` (rank_bm25-Entity-Linking im Speicher +
+>   Hop-für-Hop-BFS per Cypher, Algorithmus unverändert), `vectorgraph`
+>   (vormals `llamagraph`).
+> - **`update_fact` wurde entfernt** (Test-Time-Updates sind nicht mehr im
+>   Projekt-Scope), ebenso das Factory-/per-Variant-Store-Handling.
+> - **Vergleichbarkeit:** Ergebnisse von vor der Migration sind wegen der
+>   Scoring-Wechsel (FTS5→Lucene, Chroma→Neo4j-HNSW) nicht direkt mit neuen
+>   Runs vergleichbar; alle Varianten wurden/werden neu gelaufen.
+
+---
+
 ## Architekturentscheidung
 
 Das Repo war wie eine Produktions-App gebaut (LangGraph, Factory-Pattern, Pydantic-Config, abstrakte Pipeline-Klassen). Für ein wissenschaftliches Experiment ist das Overhead ohne Mehrwert: schwerer zu verstehen, schwerer zu erklären, schwerer zu debuggen.

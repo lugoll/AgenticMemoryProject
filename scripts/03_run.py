@@ -2,11 +2,19 @@
 Phase 3 — Experiment ausführen: N Fragen durch eine Variante jagen.
 
 Aufruf:
-    uv run python scripts/03_run.py --variant bm25   --n 100
-    uv run python scripts/03_run.py --variant vector --n 100
-    uv run python scripts/03_run.py --variant graph  --n 100
+    uv run python scripts/03_run.py --variant bm25            --n 100
+    uv run python scripts/03_run.py --variant vector          --n 100
+    uv run python scripts/03_run.py --variant graph           --n 100
+    uv run python scripts/03_run.py --variant graphtext       --n 100
+    uv run python scripts/03_run.py --variant vectorgraph     --n 100
+    uv run python scripts/03_run.py --variant vectorgraphtext --n 100
 
-Voraussetzung: 02_setup.py wurde für die Variante bereits ausgeführt.
+Ohne --variant werden alle Varianten nacheinander ausgeführt (bm25, vector, graph, graphtext, vectorgraph, vectorgraphtext) — praktisch um die
+gesamte Pipeline mit && zu verketten:
+    uv run python scripts/03_run.py --n 100
+
+Voraussetzung: der Unified Ingest (02_setup.py) wurde einmal ausgeführt —
+alle Varianten lesen aus demselben Neo4j-Store.
 
 Ausgabe:
     evaluations/<variant>_<ts>_results.jsonl   ← eine Zeile pro Frage
@@ -25,7 +33,7 @@ from pathlib import Path
 import litellm
 
 from src.config.cfg import load_config
-from src.telemetry.tracker import register_tracker
+from src.telemetry.tracker import register_tracker, set_run_context
 from src.utils.docker_utils import ensure_containers_running, stop_containers, get_required_containers
 
 _SYSTEM_PROMPT = (
@@ -81,138 +89,155 @@ def answer_question(
 def build_memory(variant: str, cfg):
     if variant == "bm25":
         from src.memory.model_bm25 import BM25Memory
-        return BM25Memory(
-            top_k=cfg.retrieval.top_k,
-            storage_path=Path(cfg.stores.bm25),
-        )
+        return BM25Memory(config=cfg)
     elif variant == "vector":
         from src.memory.model_vector import VectorMemory
         return VectorMemory(config=cfg)
+    elif variant == "vectorrerank":
+        from src.memory.model_vectorrerank import VectorRerankMemory
+        return VectorRerankMemory(config=cfg)
     elif variant == "graph":
         from src.memory.model_graph import GraphMemory
         return GraphMemory(config=cfg)
+    elif variant == "graphtext":
+        from src.memory.model_graphtext import GraphTextMemory
+        return GraphTextMemory(config=cfg)
+    elif variant == "vectorgraph":
+        from src.memory.model_vectorgraph import VectorGraphMemory
+        return VectorGraphMemory(config=cfg)
+    elif variant == "vectorgraphtext":
+        from src.memory.model_vectorgraphtext import VectorGraphTextMemory
+        return VectorGraphTextMemory(config=cfg)
     raise ValueError(f"Unbekannte Variante: {variant}")
 
 
 def check_store_ready(variant: str, memory, cfg) -> None:
-    """Prüft ob der Store für diese Variante Daten enthält.
+    """Prüft ob der Unified Store Daten für diese Variante enthält.
     Bricht mit verständlicher Fehlermeldung ab wenn nicht — damit niemand
     einen leeren Run startet ohne zu merken dass der Ingest fehlt.
     """
-    if variant == "bm25":
-        store_path = Path(cfg.stores.bm25)
-        if not store_path.exists() or store_path.stat().st_size < 1024:
-            raise SystemExit(
-                f"\n[FEHLER] BM25-Store nicht gefunden oder leer: {store_path}\n"
-                f"         Bitte zuerst ausführen:\n"
-                f"         uv run python scripts/02_setup.py --variant bm25 --data data/hotpotqa.json\n"
+    hint = (
+        "         Bitte zuerst den Unified Ingest ausführen:\n"
+        "         uv run python scripts/02_setup.py --data data/hotpotqa.json\n"
+    )
+    try:
+        chunks = memory.chunk_count
+    except Exception as e:
+        raise SystemExit(
+            f"\n[FEHLER] Neo4j nicht erreichbar: {e}\n"
+            f"         Ist Neo4j gestartet?  docker compose up -d neo4j\n" + hint
+        )
+    if chunks == 0:
+        raise SystemExit(
+            f"\n[FEHLER] Unified Store ist leer (0 Chunks in Neo4j)\n" + hint
+        )
+
+    if variant in ("graph", "graphtext", "vectorgraph", "vectorgraphtext") and memory.edge_count == 0:
+        raise SystemExit(
+            f"\n[FEHLER] Knowledge Graph ist leer (0 Kanten in Neo4j)\n"
+            f"         Chunks vorhanden ({chunks}), aber keine extrahierten Triples.\n" + hint
+        )
+
+    print(
+        f"  Unified Store: {chunks} Chunks, {memory.entity_count} Entities, "
+        f"{memory.edge_count} Kanten ✓"
+    )
+
+
+# Default set run when --variant is omitted ("run all" path).
+ALL_VARIANTS = ["bm25", "vector", "graph", "graphtext", "vectorgraph", "vectorgraphtext"]
+# Opt-in-only variants: buildable/selectable via --variant, but excluded from the
+# default "run all" loop. `fullcontext` is the per-question oracle baseline (feeds each
+# question's own HotpotQA context straight to the LLM, no retrieval, no store).
+SELECTABLE_VARIANTS = ALL_VARIANTS + ["vectorrerank", "fullcontext"]
+
+
+def run_questions(
+    variant: str,
+    questions: list[dict],
+    cfg,
+    memory,
+    results_path: Path,
+) -> None:
+    """Läuft die N Fragen durch eine bereits gebaute Memory und schreibt results.jsonl.
+
+    Reiner Frage-Loop ohne Container- oder Tracker-Verwaltung — geteilt von der
+    03-CLI (run_variant) und dem Sweep-Orchestrator (05_sweep.py), damit beide
+    identisches Record-Format und identische Telemetrie-Bindung nutzen. Der
+    Aufrufer ist dafür verantwortlich, Container zu starten, den Tracker zu
+    registrieren und die Memory via build_memory zu erstellen.
+    """
+    with results_path.open("w", encoding="utf-8") as out:
+        for i, q in enumerate(questions):
+            run_id = uuid.uuid4().hex[:8]
+            # Bind retrieval_overhead telemetry events to this question.
+            set_run_context(run_id)
+            t_total = time.perf_counter()
+
+            if variant == "fullcontext":
+                # Oracle baseline: skip retrieval entirely, feed the LLM this
+                # question's own HotpotQA context (memory is None here).
+                context = q.get("context", [])
+            else:
+                context = memory.search(q["question"])
+            result = answer_question(
+                question=q["question"],
+                context=context,
+                cfg_agent=cfg.llm.agent,
+                variant=variant,
+                run_id=run_id,
             )
 
-    elif variant == "graph":
-        store_path = Path(cfg.stores.graph)
-        if not store_path.exists():
-            raise SystemExit(
-                f"\n[FEHLER] Graph-Store nicht gefunden: {store_path}\n"
-                f"         Bitte zuerst ausführen:\n"
-                f"         uv run python scripts/02_setup.py --variant graph --data data/hotpotqa.json\n"
-            )
-        if memory.edge_count == 0:
-            raise SystemExit(
-                f"\n[FEHLER] Graph-Store ist leer (0 Kanten): {store_path}\n"
-                f"         Datei existiert, aber enthält keinen Graphen.\n"
-                f"         Bitte Ingest erneut ausführen:\n"
-                f"         uv run python scripts/02_setup.py --variant graph --data data/hotpotqa.json\n"
-            )
-        print(f"  Graph-Store: {memory.node_count} Nodes, {memory.edge_count} Kanten ✓")
+            total_latency_ms = round((time.perf_counter() - t_total) * 1000, 2)
 
-    elif variant == "vector":
-        try:
-            count = memory._collection.count()
-        except Exception as e:
-            raise SystemExit(
-                f"\n[FEHLER] Vector-Store nicht erreichbar: {e}\n"
-                f"         Ist ChromaDB gestartet?  docker compose up -d chromadb\n"
-                f"         Falls ja, Ingest ausführen:\n"
-                f"         uv run python scripts/02_setup.py --variant vector --data data/hotpotqa.json\n"
-            )
-        if count == 0:
-            raise SystemExit(
-                f"\n[FEHLER] Vector-Store ist leer (0 Dokumente in ChromaDB)\n"
-                f"         Bitte zuerst ausführen:\n"
-                f"         uv run python scripts/02_setup.py --variant vector --data data/hotpotqa.json\n"
-            )
-        print(f"  Vector-Store: {count} Dokumente in ChromaDB ✓")
+            record = {
+                "run_id":            run_id,
+                "variant":           variant,
+                "question":          q["question"],
+                "expected":          q["answer"],
+                "answer":            result.answer,
+                "type":              q.get("type", "unknown"),
+                "context":           context,
+                "latency_ms":        total_latency_ms,
+                "tokens_prompt":     result.tokens_prompt,
+                "tokens_completion": result.tokens_completion,
+                "ts":                datetime.now(timezone.utc).isoformat(),
+            }
+            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out.flush()
+
+            if (i + 1) % 10 == 0 or i == 0:
+                print(
+                    f"  [{i+1:3d}/{len(questions)}]  {total_latency_ms:6.0f}ms  "
+                    f"ctx={len(context)}  answer={result.answer[:60]!r}"
+                )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="RAG-Experiment ausführen")
-    parser.add_argument("--variant", required=True, choices=["bm25", "vector", "graph"])
-    parser.add_argument("--n",    type=int,  default=100, help="Anzahl Fragen (default: 100)")
-    parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
-    args = parser.parse_args()
-
-    cfg = load_config()
-    output_dir = Path(cfg.telemetry.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Start required containers
-    containers = get_required_containers(args.variant)
+def run_variant(variant: str, questions: list[dict], cfg, output_dir: Path) -> None:
+    """Führt eine einzelne Variante aus (Container-Start/-Stop inklusive)."""
+    # fullcontext is the oracle baseline: no retrieval, no store — it reads each
+    # question's own context and only needs ollama-agent to answer.
+    is_full = variant == "fullcontext"
+    containers = get_required_containers(variant)
+    if is_full:
+        containers = [c for c in containers if c != "neo4j"]
     if containers:
-        print(f"Starting containers for {args.variant}...")
+        print(f"Starting containers for {variant}...")
         ensure_containers_running(containers)
 
     try:
-        tracker = register_tracker(output_dir=output_dir, variant_name=args.variant)
+        tracker = register_tracker(output_dir=output_dir, variant_name=variant)
 
-        with args.data.open(encoding="utf-8") as f:
-            data = json.load(f)
+        print(f"Variante: {variant}  |  Fragen: {len(questions)}")
 
-        questions = data["questions"][: args.n]
-        print(f"Variante: {args.variant}  |  Fragen: {len(questions)}")
-
-        memory = build_memory(args.variant, cfg)
-        check_store_ready(args.variant, memory, cfg)
+        memory = None if is_full else build_memory(variant, cfg)
+        if not is_full:
+            check_store_ready(variant, memory, cfg)
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        results_path = output_dir / f"{args.variant}_{ts}_results.jsonl"
+        results_path = output_dir / f"{variant}_{ts}_results.jsonl"
 
-        with results_path.open("w", encoding="utf-8") as out:
-            for i, q in enumerate(questions):
-                run_id = uuid.uuid4().hex[:8]
-                t_total = time.perf_counter()
-
-                context = memory.search(q["question"])
-                result = answer_question(
-                    question=q["question"],
-                    context=context,
-                    cfg_agent=cfg.llm.agent,
-                    variant=args.variant,
-                    run_id=run_id,
-                )
-
-                total_latency_ms = round((time.perf_counter() - t_total) * 1000, 2)
-
-                record = {
-                    "run_id":            run_id,
-                    "variant":           args.variant,
-                    "question":          q["question"],
-                    "expected":          q["answer"],
-                    "answer":            result.answer,
-                    "type":              q.get("type", "unknown"),
-                    "context":           context,
-                    "latency_ms":        total_latency_ms,
-                    "tokens_prompt":     result.tokens_prompt,
-                    "tokens_completion": result.tokens_completion,
-                    "ts":                datetime.now(timezone.utc).isoformat(),
-                }
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                out.flush()
-
-                if (i + 1) % 10 == 0 or i == 0:
-                    print(
-                        f"  [{i+1:3d}/{len(questions)}]  {total_latency_ms:6.0f}ms  "
-                        f"ctx={len(context)}  answer={result.answer[:60]!r}"
-                    )
+        run_questions(variant, questions, cfg, memory, results_path)
 
         print(f"\nErgebnisse -> {results_path}")
         print(f"Telemetry  -> {tracker.telemetry_path}")
@@ -222,6 +247,31 @@ def main() -> None:
         if containers:
             print("\nStopping containers...")
             stop_containers(containers)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="RAG-Experiment ausführen")
+    parser.add_argument("--variant", choices=SELECTABLE_VARIANTS, default=None,
+                        help="Einzelne Variante. Ohne Angabe werden alle "
+                             "Default-Varianten nacheinander ausgeführt "
+                             "(vectorrerank und fullcontext sind opt-in).")
+    parser.add_argument("--n",    type=int,  default=100, help="Anzahl Fragen (default: 100)")
+    parser.add_argument("--data", type=Path, default=Path("data/hotpotqa.json"))
+    args = parser.parse_args()
+
+    cfg = load_config()
+    output_dir = Path(cfg.telemetry.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    with args.data.open(encoding="utf-8") as f:
+        data = json.load(f)
+    questions = data["questions"][: args.n]
+
+    variants = [args.variant] if args.variant else ALL_VARIANTS
+    for variant in variants:
+        if len(variants) > 1:
+            print(f"\n{'='*62}\n  {variant}\n{'='*62}")
+        run_variant(variant, questions, cfg, output_dir)
 
 
 if __name__ == "__main__":
